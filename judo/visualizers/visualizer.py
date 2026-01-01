@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
+from typing import Optional
 import threading
 
 import mujoco
@@ -30,15 +31,15 @@ class Visualizer:
     """
 
     def __init__(
-        self,
-        init_task: str = "cylinder_push",
-        init_optimizer: str = "cem",
-        task_registration_cfg: DictConfig | None = None,
-        optimizer_registration_cfg: DictConfig | None = None,
-        controller_override_cfg: DictConfig | None = None,
-        optimizer_override_cfg: DictConfig | None = None,
-        sim_pause_button: bool = True,
-        geom_exclude_substring: str = "collision",
+            self,
+            init_task: str = "cylinder_push",
+            init_optimizer: str = "cem",
+            task_registration_cfg: Optional[DictConfig] = None,
+            optimizer_registration_cfg: Optional[DictConfig] = None,
+            controller_override_cfg: Optional[DictConfig] = None,
+            optimizer_override_cfg: Optional[DictConfig] = None,
+            sim_pause_button: bool = True,
+            geom_exclude_substring: str = "collision",
     ) -> None:
         """Initialize the visualization node."""
         # handling custom task and optimizer registration
@@ -108,10 +109,10 @@ class Visualizer:
         task_cls, _ = task_entry
         self.task = task_cls()
         self.task_config = self.task.config
-        self.data = mujoco.MjData(self.task.model)
+        self.data = mujoco.MjData(self.task.mj_model)
         self.viser_model = ViserMjModel(
             self.server,
-            self.task.spec,
+            self.task.mj_spec,
             geom_exclude_substring=self.geom_exclude_substring,
         )
 

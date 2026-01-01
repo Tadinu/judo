@@ -9,14 +9,16 @@ from judo.tasks.cylinder_push import CylinderPush, CylinderPushConfig
 from judo.tasks.fr3_pick import FR3Pick, FR3PickConfig
 from judo.tasks.leap_cube import LeapCube, LeapCubeConfig
 from judo.tasks.leap_cube_down import LeapCubeDown, LeapCubeDownConfig
+from judo.tasks.allegro_cube import AllegroCube, AllegroCubeConfig
 
 _registered_tasks: Dict[str, Tuple[Type[Task], Type[TaskConfig]]] = {
-    CylinderPush.name: (CylinderPush, CylinderPushConfig),
-    Cartpole.name: (Cartpole, CartpoleConfig),
-    FR3Pick.name: (FR3Pick, FR3PickConfig),
-    LeapCube.name: (LeapCube, LeapCubeConfig),
-    LeapCubeDown.name: (LeapCubeDown, LeapCubeDownConfig),
-    CaltechLeapCube.name: (CaltechLeapCube, CaltechLeapCubeConfig),
+    CylinderPush.config_t.task_name: (CylinderPush, CylinderPushConfig),
+    Cartpole.config_t.task_name: (Cartpole, CartpoleConfig),
+    FR3Pick.config_t.task_name: (FR3Pick, FR3PickConfig),
+    LeapCube.config_t.task_name: (LeapCube, LeapCubeConfig),
+    LeapCubeDown.config_t.task_name: (LeapCubeDown, LeapCubeDownConfig),
+    CaltechLeapCube.config_t.task_name: (CaltechLeapCube, CaltechLeapCubeConfig),
+    AllegroCube.config_t.task_name: (AllegroCube, AllegroCubeConfig),
 }
 
 
@@ -47,4 +49,6 @@ __all__ = [
     "LeapCubeConfig",
     "LeapCubeDown",
     "LeapCubeDownConfig",
+    "AllegroCube",
+    "AllegroCubeConfig",
 ]

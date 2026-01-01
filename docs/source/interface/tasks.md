@@ -1,26 +1,29 @@
 ## Tasks
 The `Task` class allows you to define custom environments and rewards. Creating a new task is easy.
+
 ```python
 from dataclasses import dataclass
 from judo.tasks import Task, TaskConfig
+
 
 @dataclass
 class MyTaskConfig(TaskConfig):
     my_param1: float = 1.0
     my_param2: int = 2
 
+
 class MyTask(Task[MyTaskConfig]):
     def __init__(self, model_path: Path | str, sim_model_path: Path | str | None = None) -> None:
-        super().__init__(model_path, sim_model_path=sim_model_path)
+        super().__init__(model_path, sim_xml_path=sim_model_path)
         # rest of __init__...
 
     def reward(
-        self,
-        states: np.ndarray,
-        sensors: np.ndarray,
-        controls: np.ndarray,
-        config: MyTaskConfig,
-        system_metadata: dict[str, Any] | None = None,
+            self,
+            states: np.ndarray,
+            sensors: np.ndarray,
+            controls: np.ndarray,
+            config: MyTaskConfig,
+            system_metadata: dict[str, Any] | None = None,
     ) -> np.ndarray:
         """Abstract reward function for task.
 

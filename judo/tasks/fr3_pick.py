@@ -2,7 +2,8 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, Optional
+from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -81,6 +82,7 @@ class GlobalConfig:
 class FR3PickConfig(TaskConfig):
     """Reward configuration for FR3 pick task."""
 
+    task_name: str = "fr3_pick"
     # reward weights
     lift_weights: LiftConfig = field(default_factory=LiftConfig)
     move_weights: MoveConfig = field(default_factory=MoveConfig)
@@ -104,12 +106,11 @@ class FR3PickConfig(TaskConfig):
 class FR3Pick(Task[FR3PickConfig]):
     """Defines the FR3 pick task."""
 
-    name: str = "fr3_pick"
     config_t: type[FR3PickConfig] = FR3PickConfig
 
-    def __init__(self, model_path: str = XML_PATH, sim_model_path: str | None = None) -> None:
+    def __init__(self, xml_path: str = XML_PATH, sim_xml_path: Optional[Path | str] = None) -> None:
         """Initializes the LEAP cube rotation task."""
-        super().__init__(model_path=model_path, sim_model_path=sim_model_path)
+        super().__init__(xml_path=xml_path, sim_xml_path=sim_xml_path)
         self.reset_command = np.array([0, 0, 0, -1.57079, 0, 1.57079, -0.7853, 0.0])
 
         # object indices
@@ -137,7 +138,7 @@ class FR3Pick(Task[FR3PickConfig]):
         self.ee_z_slice = slice(self.ee_z_adr, self.ee_z_adr + 3)
 
         # metadata that stores the current phase of the task
-        self._data = mujoco.MjData(self.model)  # used for computing hypothetical sensor data
+        self._data = mujoco.MjData(self.mj_model)  # used for computing hypothetical sensor data
         self.phase = Phase.LIFT  # default phase
 
         self.reset()
@@ -152,15 +153,16 @@ class FR3Pick(Task[FR3PickConfig]):
         Returns:
             in_goal: A bool indicating whether the object is in the goal region. Shape=(,).
         """
-        obj_pos = curr_state[self.obj_pos_adr : self.obj_pos_adr + 2]  # (2,)
+        obj_pos = curr_state[self.obj_pos_adr: self.obj_pos_adr + 2]  # (2,)
         dist = np.linalg.norm(obj_pos - self.config.goal_pos)
         in_goal = dist <= self.config.goal_radius
         return in_goal
 
     def check_sensor_dists(
-        self,
-        sensors: np.ndarray,
-        pair: Literal["left_finger_obj", "right_finger_obj", "left_finger_table", "right_finger_table", "obj_table"],
+            self,
+            sensors: np.ndarray,
+            pair: Literal[
+                "left_finger_obj", "right_finger_obj", "left_finger_table", "right_finger_table", "obj_table"],
     ) -> np.ndarray:
         """Computes the distance between a specified pair of bodies.
 
@@ -191,9 +193,9 @@ class FR3Pick(Task[FR3PickConfig]):
     def pre_rollout(self, curr_state: np.ndarray) -> None:
         """Computes the current phase of the system."""
         # update the data object associated with the current state
-        self._data.qpos[:] = curr_state[: self.model.nq]
-        self._data.qvel[:] = curr_state[self.model.nq : self.model.nq + self.model.nv]
-        mujoco.mj_forward(self.model, self._data)
+        self._data.qpos[:] = curr_state[: self.mj_model.nq]
+        self._data.qvel[:] = curr_state[self.mj_model.nq: self.mj_model.nq + self.mj_model.nv]
+        mujoco.mj_forward(self.mj_model, self._data)
 
         # BUG: mujoco distance sensor seems to be broken and doesn't always return signed distance, so here we instead
         # check the object z position
@@ -223,11 +225,11 @@ class FR3Pick(Task[FR3PickConfig]):
         self.phase = phase
 
     def reward(
-        self,
-        states: np.ndarray,
-        sensors: np.ndarray,
-        controls: np.ndarray,
-        system_metadata: dict[str, Any] | None = None,
+            self,
+            states: np.ndarray,
+            sensors: np.ndarray,
+            controls: np.ndarray,
+            system_metadata: dict[str, Any] | None = None,
     ) -> np.ndarray:
         """Implements the LEAP cube rotation tracking task reward.
 
@@ -246,7 +248,7 @@ class FR3Pick(Task[FR3PickConfig]):
         left_finger_table_dist = self.check_sensor_dists(sensors, "left_finger_table")  # noqa: F841
         right_finger_table_dist = self.check_sensor_dists(sensors, "right_finger_table")  # noqa: F841
         obj_table_dist = self.check_sensor_dists(sensors, "obj_table")  # noqa: F841
-        grasp_site_pos = sensors[..., self.grasp_site_adr : self.grasp_site_adr + 3]  # (num_rollouts, T, 3)
+        grasp_site_pos = sensors[..., self.grasp_site_adr: self.grasp_site_adr + 3]  # (num_rollouts, T, 3)
         ee_z_axis = sensors[..., self.ee_z_slice]  # (num_rollouts, T, 3)
 
         # querying states
@@ -254,7 +256,7 @@ class FR3Pick(Task[FR3PickConfig]):
         arm_pos = states[..., self.arm_pos_slice]  # (num_rollouts, T, 9)
         xy_pos = states[..., :2]  # (num_rollouts, T, 2)
         z_obj = states[..., self.obj_pos_adr + 2]  # (num_rollouts, T)
-        qvel = states[..., self.model.nq : self.model.nq + self.model.nv]  # (num_rollouts, T, nv)
+        qvel = states[..., self.mj_model.nq: self.mj_model.nq + self.mj_model.nv]  # (num_rollouts, T, nv)
         qvel_norm = np.linalg.norm(qvel, axis=-1)  # (num_rollouts, T)
         gripper_pos = arm_pos[..., -1]  # (num_rollouts, T)
 
@@ -312,7 +314,7 @@ class FR3Pick(Task[FR3PickConfig]):
 
     def reset(self) -> None:
         """Resets the model to a default state with random goal."""
-        self.data.qpos[:] = QPOS_HOME
-        self.data.qvel[:] = 0.0
-        self.data.ctrl[:] = self.reset_command
-        mujoco.mj_forward(self.model, self.data)
+        self.mj_data.qpos[:] = QPOS_HOME
+        self.mj_data.qvel[:] = 0.0
+        self.mj_data.ctrl[:] = self.reset_command
+        mujoco.mj_forward(self.mj_model, self.mj_data)

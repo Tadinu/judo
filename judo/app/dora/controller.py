@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
+from typing import Optional
 import time
 from threading import Lock
 
@@ -16,22 +17,21 @@ class ControllerNode(DoraNode):
     """Controller node."""
 
     def __init__(
-        self,
-        init_task: str = "cylinder_push",
-        init_optimizer: str = "cem",
-        node_id: str = "controller",
-        max_workers: int | None = None,
-        task_registration_cfg: DictConfig | None = None,
-        optimizer_registration_cfg: DictConfig | None = None,
+            self,
+            init_task: str = "cylinder_push",
+            init_optimizer: str = "cem",
+            node_id: str = "controller",
+            max_workers: Optional[int] = None,
+            task_registration_cfg: Optional[DictConfig] = None,
+            optimizer_registration_cfg: Optional[DictConfig] = None,
     ) -> None:
         """Initialize the controller node."""
         super().__init__(node_id=node_id, max_workers=max_workers)
-        self.controller = make_controller(
-            init_task=init_task,
-            init_optimizer=init_optimizer,
-            task_registration_cfg=task_registration_cfg,
-            optimizer_registration_cfg=optimizer_registration_cfg,
-        )
+        self.controller = make_controller(sim=None,
+                                          init_task=init_task,
+                                          init_optimizer=init_optimizer,
+                                          task_registration_cfg=task_registration_cfg,
+                                          optimizer_registration_cfg=optimizer_registration_cfg)
         self._paused = False
         self.write_controls()
         self.lock = Lock()
@@ -99,7 +99,8 @@ class ControllerNode(DoraNode):
     def write_controls(self) -> None:
         """Util that publishes the current controller spline."""
         # send control action
-        arr, metadata = to_arrow(self.controller.spline_data)
+        arr, metadata = to_arrow(self.controller.nominal_spline_data)
+        print("BBBBBBBB", metadata)
         self.node.send_output("controls", arr, metadata)
 
         # send traces
@@ -114,7 +115,7 @@ class ControllerNode(DoraNode):
     def update_states(self, event: dict) -> None:
         """Callback to update states on receiving a new state measurement."""
         state_msg = from_event(event, MujocoState)
-        self.controller.update_states(state_msg)
+        self.controller.update_state(state_msg)
 
     def step(self) -> None:
         """Updates the controls state internally."""

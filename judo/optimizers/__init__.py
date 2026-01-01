@@ -12,6 +12,7 @@ from judo.optimizers.overrides import (
     set_default_fr3_pick_overrides,
     set_default_leap_cube_down_overrides,
     set_default_leap_cube_overrides,
+    set_default_allegro_cube_overrides
 )
 from judo.optimizers.ps import PredictiveSampling, PredictiveSamplingConfig
 
@@ -21,7 +22,7 @@ set_default_cylinder_push_overrides()
 set_default_fr3_pick_overrides()
 set_default_leap_cube_overrides()
 set_default_leap_cube_down_overrides()
-
+set_default_allegro_cube_overrides()
 
 _registered_optimizers: dict[str, tuple[Type[Optimizer], Type[OptimizerConfig]]] = {
     "cem": (CrossEntropyMethod, CrossEntropyMethodConfig),
@@ -36,9 +37,9 @@ def get_registered_optimizers() -> dict[str, tuple[Type[Optimizer], Type[Optimiz
 
 
 def register_optimizer(
-    name: str,
-    controller_type: Type[Optimizer],
-    controller_config_type: Type[OptimizerConfig],
+        name: str,
+        controller_type: Type[Optimizer],
+        controller_config_type: Type[OptimizerConfig],
 ) -> None:
     """Register a new optimizer."""
     _registered_optimizers[name] = (controller_type, controller_config_type)

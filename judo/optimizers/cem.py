@@ -1,6 +1,7 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 from dataclasses import dataclass
+from typing import Optional
 
 import numpy as np
 from scipy.interpolate import interp1d
@@ -20,9 +21,9 @@ class CrossEntropyMethodConfig(OptimizerConfig):
 class CrossEntropyMethod(Optimizer[CrossEntropyMethodConfig]):
     """The cross-entropy method."""
 
-    def __init__(self, config: CrossEntropyMethodConfig, nu: int) -> None:
+    def __init__(self, config: CrossEntropyMethodConfig, nu: int, override_task_name: Optional[str] = None) -> None:
         """Initialize cross-entropy method optimizer."""
-        super().__init__(config, nu)
+        super().__init__(config, nu, override_task_name)
         num_nodes = config.num_nodes
         self.sigma = ((self.sigma_min + self.sigma_max) / 2) * np.ones((num_nodes, nu))
 

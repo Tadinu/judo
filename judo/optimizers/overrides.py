@@ -1,9 +1,10 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
-
-from judo.config import set_config_overrides
+from judo import BackendType
+from judo.config import set_config_overrides, get_override_config
 from judo.optimizers.cem import CrossEntropyMethodConfig
 from judo.optimizers.mppi import MPPIConfig
 from judo.optimizers.ps import PredictiveSamplingConfig
+from judo.tasks import AllegroCubeConfig
 
 
 def set_default_cylinder_push_overrides() -> None:
@@ -176,6 +177,44 @@ def set_default_caltech_leap_cube_overrides() -> None:
         {
             "num_nodes": 4,
             "num_rollouts": 32,
+            "use_noise_ramp": True,
+            "noise_ramp": 4.0,
+            "sigma": 0.2,
+            "temperature": 0.0025,
+        },
+    )
+
+
+def set_default_allegro_cube_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the leap cube task."""
+    set_config_overrides(
+        "allegro_cube",
+        PredictiveSamplingConfig,
+        {
+            "num_nodes": 4,
+            "num_rollouts": 128,
+            "use_noise_ramp": True,
+            "noise_ramp": 4.0,
+            "sigma": 0.2,
+        },
+    )
+    set_config_overrides(
+        "allegro_cube",
+        CrossEntropyMethodConfig,
+        {
+            "num_nodes": 4,
+            "num_rollouts": 16 if AllegroCubeConfig().sim_backend_type() == BackendType.MUJOCO else 32,
+            "num_elites": 5,
+            "use_noise_ramp": True,
+            "noise_ramp": 4.0,
+        },
+    )
+    set_config_overrides(
+        "allegro_cube",
+        MPPIConfig,
+        {
+            "num_nodes": 4,
+            "num_rollouts": 128,
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
             "sigma": 0.2,

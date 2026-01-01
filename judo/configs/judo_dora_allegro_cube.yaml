@@ -1,0 +1,27 @@
+defaults:
+  - judo_dora_default
+
+task: allegro_cube
+optimizer: cem
+custom_tasks:
+  allegro_cube_rotate:
+    task: judo.examples.allegro_cube_rotate.AllegroCubeRotate
+    config: judo.examples.allegro_cube_rotate.AllegroCubeRotateConfig
+
+custom_optimizers:
+  cem:
+    optimizer: judo.optimizers.cem.CrossEntropyMethod
+    config: judo.optimizers.cem.CrossEntropyMethodConfig
+
+# example of how to use task-specific controller config overrides
+controller_config_overrides:
+  allegro_cube_rotate:
+    horizon: 1.0
+    spline_order: ZERO
+
+optimizer_config_overrides:
+  allegro_cube_rotate:
+    cem:
+      num_rollouts: 128
+
+simulation_backend: NEWTON

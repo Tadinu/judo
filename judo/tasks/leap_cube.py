@@ -1,7 +1,8 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional, Union
+from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -30,6 +31,7 @@ QPOS_HOME = np.array(
 class LeapCubeConfig(TaskConfig):
     """Reward configuration LEAP cube rotation task."""
 
+    task_name: str = "leap_cube"
     w_pos: float = 100.0
     w_rot: float = 0.1
 
@@ -37,16 +39,15 @@ class LeapCubeConfig(TaskConfig):
 class LeapCube(Task[LeapCubeConfig]):
     """Defines the LEAP cube rotation task."""
 
-    name: str = "leap_cube"
     config_t: type[LeapCubeConfig] = LeapCubeConfig
 
     def __init__(
-        self,
-        model_path: str = XML_PATH,
-        sim_model_path: str | None = SIM_XML_PATH,
+            self,
+            xml_path: Optional[Union[Path, str]] = XML_PATH,
+            sim_xml_path: Optional[Union[Path, str]] = SIM_XML_PATH,
     ) -> None:
         """Initializes the LEAP cube rotation task."""
-        super().__init__(model_path=model_path, sim_model_path=sim_model_path)
+        super().__init__(xml_path=xml_path, sim_xml_path=sim_xml_path)
         self.goal_pos = np.array([0.0, 0.03, 0.1])
         self.goal_quat = np.array([1.0, 0.0, 0.0, 0.0])
         self.qpos_home = QPOS_HOME
@@ -61,11 +62,11 @@ class LeapCube(Task[LeapCubeConfig]):
         self.reset()
 
     def reward(
-        self,
-        states: np.ndarray,
-        sensors: np.ndarray,
-        controls: np.ndarray,
-        system_metadata: dict[str, Any] | None = None,
+            self,
+            states: np.ndarray,
+            sensors: np.ndarray,
+            controls: np.ndarray,
+            system_metadata: dict[str, Any] | None = None,
     ) -> np.ndarray:
         """Implements the LEAP cube rotation tracking task reward."""
         if system_metadata is None:
@@ -89,7 +90,7 @@ class LeapCube(Task[LeapCubeConfig]):
 
     def post_sim_step(self) -> None:
         """Checks if the cube has dropped and resets if so."""
-        has_dropped = self.data.qpos[2] < -0.3
+        has_dropped = self.mj_data.qpos[2] < -0.3
 
         # we reset here if the cube has dropped
         if has_dropped:
@@ -97,7 +98,7 @@ class LeapCube(Task[LeapCubeConfig]):
 
         # check whether goal quat needs to be updated
         goal_quat = self.goal_quat
-        q_diff = quat_diff(self.data.qpos[3:7], goal_quat)
+        q_diff = quat_diff(self.mj_data.qpos[3:7], goal_quat)
         sin_a_2 = np.linalg.norm(q_diff[1:])
         angle = 2 * np.arctan2(sin_a_2, q_diff[0])
         if angle > np.pi:
@@ -119,16 +120,16 @@ class LeapCube(Task[LeapCubeConfig]):
                 np.sqrt(uvw[0]) * np.cos(2 * np.pi * uvw[2]),
             ]
         )
-        self.data.mocap_quat[0] = goal_quat
+        self.mj_data.mocap_quat[0] = goal_quat
         self.goal_quat = goal_quat
 
     def reset(self) -> None:
         """Resets the model to a default state with random goal."""
-        self.data.qpos[:] = self.qpos_home
-        self.data.qvel[:] = 0.0
-        self.data.ctrl[:] = self.reset_command
+        self.mj_data.qpos[:] = self.qpos_home
+        self.mj_data.qvel[:] = 0.0
+        self.mj_data.ctrl[:] = self.reset_command
         self._update_goal_quat()
-        mujoco.mj_forward(self.model, self.data)
+        mujoco.mj_forward(self.mj_model, self.mj_data)
 
     def get_sim_metadata(self) -> dict[str, Any]:
         """Returns the simulation's goal quat."""

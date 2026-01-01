@@ -4,10 +4,15 @@ import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Literal, Union
+import enum
 
 import numpy as np
 
-NormalizerType = Literal["none", "min_max", "running"]
+
+class NormalizerType(enum.Enum):
+    NONE = enum.auto()
+    MIN_MAX = enum.auto()
+    RUNNING = enum.auto()
 
 
 @dataclass
@@ -144,12 +149,12 @@ class RunningMeanStdNormalizer(Normalizer):
     """
 
     def __init__(
-        self,
-        dim: int,
-        init_std: float = 1.0,
-        min_std: float = 1e-5,
-        max_std: float = 1e3,
-        eps: float = 1e-6,
+            self,
+            dim: int,
+            init_std: float = 1.0,
+            min_std: float = 1e-5,
+            max_std: float = 1e3,
+            eps: float = 1e-6,
     ) -> None:
         """Initialize the normalizer.
 
@@ -209,9 +214,9 @@ class RunningMeanStdNormalizer(Normalizer):
 
 
 normalizer_registry = {
-    "none": IdentityNormalizer,
-    "min_max": MinMaxNormalizer,
-    "running": RunningMeanStdNormalizer,
+    NormalizerType.NONE: IdentityNormalizer,
+    NormalizerType.MIN_MAX: MinMaxNormalizer,
+    NormalizerType.RUNNING: RunningMeanStdNormalizer,
 }
 
 

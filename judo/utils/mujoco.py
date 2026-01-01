@@ -5,11 +5,16 @@ from copy import deepcopy
 from typing import Literal
 
 import numpy as np
+
+# mujoco
 from mujoco import MjData, MjModel
 from mujoco.rollout import Rollout
 
+# judo
+from judo import BackendType
 
-def make_model_data_pairs(model: MjModel, num_pairs: int) -> list[tuple[MjModel, MjData]]:
+
+def mj_make_model_data_pairs(model: MjModel, num_pairs: int) -> list[tuple[MjModel, MjData]]:
     """Create model/data pairs for mujoco threaded rollout."""
     models = [deepcopy(model) for _ in range(num_pairs)]
     datas = [MjData(m) for m in models]
@@ -17,30 +22,30 @@ def make_model_data_pairs(model: MjModel, num_pairs: int) -> list[tuple[MjModel,
     return model_data_pairs
 
 
-class RolloutBackend:
+class MJRolloutBackend:
     """The backend for conducting multithreaded rollouts."""
 
-    def __init__(self, num_threads: int, backend: Literal["mujoco"]) -> None:
+    def __init__(self, num_threads: int, backend: BackendType) -> None:
         """Initialize the backend with a number of threads."""
         self.backend = backend
-        if self.backend == "mujoco":
+        if self.backend == BackendType.MUJOCO:
             self.setup_mujoco_backend(num_threads)
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
 
     def setup_mujoco_backend(self, num_threads: int) -> None:
         """Setup the mujoco backend."""
-        if self.backend == "mujoco":
+        if self.backend == BackendType.MUJOCO:
             self.rollout_obj = Rollout(nthread=num_threads)
             self.rollout_func = lambda m, d, x0, u: self.rollout_obj.rollout(m, d, x0, u)
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
 
     def rollout(
-        self,
-        model_data_pairs: list[tuple[MjModel, MjData]],
-        x0: np.ndarray,
-        controls: np.ndarray,
+            self,
+            model_data_pairs: list[tuple[MjModel, MjData]],
+            x0: np.ndarray,
+            controls: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
         """Conduct a rollout depending on the backend."""
         # unpack models into a list of models and data
@@ -64,7 +69,7 @@ class RolloutBackend:
         assert controls.shape[0] == full_states.shape[0]
 
         # rollout
-        if self.backend == "mujoco":
+        if self.backend == BackendType.MUJOCO:
             _states, _out_sensors = self.rollout_func(ms, ds, full_states, controls)
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
@@ -74,7 +79,7 @@ class RolloutBackend:
 
     def update(self, num_threads: int) -> None:
         """Update the backend with a new number of threads."""
-        if self.backend == "mujoco":
+        if self.backend == BackendType.MUJOCO:
             self.rollout_obj.close()
             self.setup_mujoco_backend(num_threads)
         else:

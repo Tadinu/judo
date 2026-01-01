@@ -1,7 +1,8 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
+from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -20,6 +21,7 @@ XML_PATH = str(MODEL_PATH / "xml/cartpole.xml")
 class CartpoleConfig(TaskConfig):
     """Reward configuration for the cartpole task."""
 
+    task_name: str = "cart_pole"
     w_vertical: float = 10.0
     w_centered: float = 10.0
     w_velocity: float = 0.1
@@ -31,20 +33,19 @@ class CartpoleConfig(TaskConfig):
 class Cartpole(Task[CartpoleConfig]):
     """Defines the cartpole balancing task."""
 
-    name: str = "cartpole"
     config_t: type[CartpoleConfig] = CartpoleConfig
 
-    def __init__(self, model_path: str = XML_PATH, sim_model_path: str | None = None) -> None:
+    def __init__(self, xml_path: str = XML_PATH, sim_xml_path: Optional[Path | str] = None) -> None:
         """Initializes the cartpole task."""
-        super().__init__(model_path=model_path, sim_model_path=sim_model_path)
+        super().__init__(xml_path=xml_path, sim_xml_path=sim_xml_path)
         self.reset()
 
     def reward(
-        self,
-        states: np.ndarray,
-        sensors: np.ndarray,
-        controls: np.ndarray,
-        system_metadata: dict[str, Any] | None = None,
+            self,
+            states: np.ndarray,
+            sensors: np.ndarray,
+            controls: np.ndarray,
+            system_metadata: dict[str, Any] | None = None,
     ) -> np.ndarray:
         """Implements the cartpole reward from MJPC.
 
@@ -79,6 +80,6 @@ class Cartpole(Task[CartpoleConfig]):
 
     def reset(self) -> None:
         """Resets the model to a default (random) state."""
-        self.data.qpos = np.array([1.0, np.pi]) + np.random.randn(2)
-        self.data.qvel = 1e-1 * np.random.randn(2)
-        mujoco.mj_forward(self.model, self.data)
+        self.mj_data.qpos = np.array([1.0, np.pi]) + np.random.randn(2)
+        self.mj_data.qvel = 1e-1 * np.random.randn(2)
+        mujoco.mj_forward(self.mj_model, self.mj_data)

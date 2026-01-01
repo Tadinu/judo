@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
+from typing import Optional
 import warnings
 
 import pyarrow as pa
@@ -10,6 +11,7 @@ from viser import GuiFolderHandle, GuiImageHandle, GuiInputHandle, IcosphereHand
 
 from judo.app.structs import MujocoState
 from judo.visualizers.visualizer import Visualizer
+from judo.controller.controller import SplineType
 
 ElementType = GuiImageHandle | GuiInputHandle | GuiFolderHandle | MeshHandle | IcosphereHandle
 
@@ -18,17 +20,17 @@ class VisualizationNode(DoraNode):
     """The visualization node."""
 
     def __init__(
-        self,
-        node_id: str = "visualization",
-        max_workers: int | None = None,
-        init_task: str = "cylinder_push",
-        init_optimizer: str = "cem",
-        task_registration_cfg: DictConfig | None = None,
-        optimizer_registration_cfg: DictConfig | None = None,
-        controller_override_cfg: DictConfig | None = None,
-        optimizer_override_cfg: DictConfig | None = None,
-        sim_pause_button: bool = True,
-        geom_exclude_substring: str = "collision",
+            self,
+            node_id: str = "visualization",
+            max_workers: int | None = None,
+            init_task: str = "cylinder_push",
+            init_optimizer: str = "cem",
+            task_registration_cfg: Optional[DictConfig] = None,
+            optimizer_registration_cfg: Optional[DictConfig] = None,
+            controller_override_cfg: Optional[DictConfig] = None,
+            optimizer_override_cfg: Optional[DictConfig] = None,
+            sim_pause_button: bool = True,
+            geom_exclude_substring: str = "collision",
     ) -> None:
         """Initialize the visualization node."""
         super().__init__(node_id=node_id, max_workers=max_workers)
@@ -71,24 +73,28 @@ class VisualizationNode(DoraNode):
         """Write the controller config to the GUI."""
         with self.visualizer.controller_config_lock:
             self.node.send_output("controller_config", *to_arrow(self.visualizer.controller_config))
+            print("CCCCCc", to_arrow(self.visualizer.controller_config))
         self.visualizer.controller_config_updated.clear()
 
     def write_optimizer_config(self) -> None:
         """Write the optimizer config to the GUI."""
         with self.visualizer.optimizer_config_lock:
             self.node.send_output("optimizer_config", *to_arrow(self.visualizer.optimizer_config))
+            print("DDDDDD", to_arrow(self.visualizer.optimizer_config))
         self.visualizer.optimizer_config_updated.clear()
 
     def write_task_config(self) -> None:
         """Write the task config to the GUI."""
         with self.visualizer.task_config_lock:
             self.node.send_output("task_config", *to_arrow(self.visualizer.task_config))
+            print("EEEEE", to_arrow(self.visualizer.task_config))
         self.visualizer.task_config_updated.clear()
 
     @on_event("INPUT", "states")
     def update_states(self, event: dict) -> None:
         """Callback to update states on receiving a new state measurement."""
-        if self.visualizer.controller_config.spline_order == "cubic" and self.visualizer.optimizer_config.num_nodes < 4:
+        if (SplineType(self.visualizer.controller_config.spline_order) == SplineType.CUBIC and
+                self.visualizer.optimizer_config.num_nodes < 4):
             warnings.warn("Cubic splines require at least 4 nodes. Setting num_nodes=4.", stacklevel=2)
             for e in self.visualizer.gui_elements["optimizer_params"]:
                 if e.label == "num_nodes":

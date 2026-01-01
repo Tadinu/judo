@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 from judo.config import set_config_overrides
-from judo.controller.controller import ControllerConfig
+from judo.controller.controller import SplineType, ControllerConfig
 
 
 def set_default_cylinder_push_overrides() -> None:
@@ -11,7 +11,7 @@ def set_default_cylinder_push_overrides() -> None:
         ControllerConfig,
         {
             "horizon": 1.0,
-            "spline_order": "zero",
+            "spline_order": SplineType.ZERO.name,
         },
     )
 
@@ -23,7 +23,7 @@ def set_default_cartpole_overrides() -> None:
         ControllerConfig,
         {
             "horizon": 1.0,
-            "spline_order": "zero",
+            "spline_order": SplineType.ZERO.name,
         },
     )
 
@@ -35,7 +35,7 @@ def set_default_leap_cube_overrides() -> None:
         ControllerConfig,
         {
             "horizon": 1.0,
-            "spline_order": "cubic",
+            "spline_order": SplineType.CUBIC.name,
             "max_num_traces": 1,
         },
     )
@@ -48,7 +48,7 @@ def set_default_leap_cube_down_overrides() -> None:
         ControllerConfig,
         {
             "horizon": 1.0,
-            "spline_order": "cubic",
+            "spline_order": SplineType.CUBIC.name,
             "max_num_traces": 1,
         },
     )
@@ -61,7 +61,7 @@ def set_default_caltech_leap_cube_overrides() -> None:
         ControllerConfig,
         {
             "horizon": 1.0,
-            "spline_order": "cubic",
+            "spline_order": SplineType.CUBIC.name,
             "max_num_traces": 1,
         },
     )
@@ -74,8 +74,21 @@ def set_default_fr3_pick_overrides() -> None:
         ControllerConfig,
         {
             "horizon": 1.0,
-            "spline_order": "linear",
+            "spline_order": SplineType.LINEAR.name,
             "max_num_traces": 3,
             "control_freq": 20.0,
         },
+    )
+
+
+def set_default_allegro_cube_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the allegro cube task."""
+    set_config_overrides(
+        "allegro_cube",
+        ControllerConfig,
+        {
+            "horizon": 1.0,
+            "spline_order": SplineType.CUBIC.name,
+            "max_num_traces": 1,
+        }
     )

@@ -4,8 +4,10 @@ from contextlib import nullcontext as does_not_raise
 
 import numpy as np
 
+from judo import BackendType
 from judo.controller import ControllerConfig, make_controller
-from judo.utils.normalization import IdentityNormalizer, MinMaxNormalizer, RunningMeanStdNormalizer
+from judo.utils.normalization import IdentityNormalizer, MinMaxNormalizer, RunningMeanStdNormalizer, NormalizerType
+
 
 # ##### #
 # TESTS #
@@ -67,7 +69,7 @@ def test_running_mean_std_normalizer() -> None:
 
     # Test iterative calls
     for i in range(n_iters):
-        batch = data[i * batch_size : (i + 1) * batch_size]
+        batch = data[i * batch_size: (i + 1) * batch_size]
         normalizer.update(batch)
 
         # Check that statistics were updated correctly
@@ -97,7 +99,7 @@ def test_running_mean_std_normalizer_3d_data() -> None:
 
     # Test iterative calls
     for i in range(n_iters):
-        batch = data[i * batch_size1 : (i + 1) * batch_size1]
+        batch = data[i * batch_size1: (i + 1) * batch_size1]
         normalizer.update(batch)
 
         # Check that statistics were updated correctly
@@ -122,7 +124,7 @@ def test_normalizer_type_change() -> None:
     controller = make_controller(
         init_task="cylinder_push",
         init_optimizer="cem",
-        rollout_backend="mujoco",
+        rollout_backend=BackendType.MUJOCO,
     )
 
     # Initially should be IdentityNormalizer
@@ -132,7 +134,7 @@ def test_normalizer_type_change() -> None:
     controller.controller_cfg.action_normalizer = "min_max"
 
     # Run action update loop once
-    controller.current_state = np.random.rand(controller.task.model.nq + controller.task.model.nv)
+    controller.mj_current_state = np.random.rand(controller.task.mj_model.nq + controller.task.mj_model.nv)
     controller.time = 0.0
     controller.update_action()
 
@@ -143,15 +145,15 @@ def test_normalizer_type_change() -> None:
 def test_normalizer_in_update_action_loop() -> None:
     """Test that normalizers work in the update_action loop."""
     # Test with different normalizer types
-    for normalizer_type in ["none", "min_max", "running"]:
+    for normalizer_type in [NormalizerType.NONE, NormalizerType.MIN_MAX, NormalizerType.RUNNING]:
         controller = make_controller(
             init_task="cylinder_push",
             init_optimizer="cem",
-            rollout_backend="mujoco",
+            rollout_backend=BackendType.MUJOCO,
         )
-        controller.controller_cfg = ControllerConfig(action_normalizer=normalizer_type)
+        controller.controller_cfg = ControllerConfig(action_normalizer=normalizer_type.name)
 
-        controller.current_state = np.random.rand(controller.task.model.nq + controller.task.model.nv)
+        controller.mj_current_state = np.random.rand(controller.task.mj_model.nq + controller.task.mj_model.nv)
         controller.time = 0.0
 
         # This should run without error
@@ -164,9 +166,9 @@ def test_min_max_normalizer_with_task_control_ranges() -> None:
     controller = make_controller(
         init_task="cylinder_push",
         init_optimizer="cem",
-        rollout_backend="mujoco",
+        rollout_backend=BackendType.MUJOCO,
     )
-    controller.controller_cfg = ControllerConfig(action_normalizer="min_max", max_opt_iters=1)
+    controller.controller_cfg = ControllerConfig(action_normalizer=NormalizerType.MIN_MAX.name, max_opt_iters=1)
 
     assert isinstance(controller.action_normalizer, MinMaxNormalizer)
 
@@ -175,7 +177,7 @@ def test_min_max_normalizer_with_task_control_ranges() -> None:
     np.testing.assert_array_almost_equal(controller.action_normalizer.max, controller.task.actuator_ctrlrange[:, 1])
 
     # Run optimization loop
-    controller.current_state = np.random.rand(controller.task.model.nq + controller.task.model.nv)
+    controller.mj_current_state = np.random.rand(controller.task.mj_model.nq + controller.task.mj_model.nv)
     controller.time = 0.0
     controller.update_action()
 
@@ -193,19 +195,18 @@ def test_min_max_normalizer_with_task_control_ranges() -> None:
 
 def test_running_normalizer_updates_with_optimizer_data() -> None:
     """Test that running normalizer correctly updates with optimizer data."""
-    controller = make_controller(
-        init_task="cylinder_push",
-        init_optimizer="cem",
-        rollout_backend="mujoco",
-    )
-    controller.controller_cfg = ControllerConfig(action_normalizer="running", max_opt_iters=1)
+    controller = make_controller(sim=None,
+                                 init_task="cylinder_push",
+                                 init_optimizer="cem",
+                                 rollout_backend=BackendType.MUJOCO)
+    controller.controller_cfg = ControllerConfig(action_normalizer=NormalizerType.RUNNING.name, max_opt_iters=1)
 
     # Check initial state
     assert isinstance(controller.action_normalizer, RunningMeanStdNormalizer)
     assert controller.action_normalizer.count == 0
 
     # Run optimization loop
-    controller.current_state = np.random.rand(controller.task.model.nq + controller.task.model.nv)
+    controller.mj_current_state = np.random.rand(controller.task.mj_model.nq + controller.task.mj_model.nv)
     controller.time = 0.0
     controller.update_action()
 

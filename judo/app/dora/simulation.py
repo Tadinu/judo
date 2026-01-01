@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
+from typing import Optional
 import time
 import warnings
 
@@ -7,6 +8,8 @@ from dora_utils.dataclasses import from_arrow, to_arrow
 from dora_utils.node import DoraNode, on_event
 from omegaconf import DictConfig
 
+# Judo
+from judo import BackendType
 from judo.app.structs import SplineData
 from judo.simulation import get_simulation_backend
 
@@ -15,24 +18,24 @@ class SimulationNode(DoraNode):
     """The simulation node."""
 
     def __init__(
-        self,
-        node_id: str = "simulation",
-        init_task: str = "cylinder_push",
-        max_workers: int | None = None,
-        task_registration_cfg: DictConfig | None = None,
-        simulation_backend: str = "mujoco",
+            self,
+            node_id: str = "simulation",
+            init_task: str = "cylinder_push",
+            max_workers: Optional[int] = None,
+            task_registration_cfg: Optional[DictConfig] = None,
+            simulation_backend: str = BackendType.NEWTON.name,
     ) -> None:
         """Initialize the simulation node."""
         super().__init__(node_id=node_id, max_workers=max_workers)
-        _sim_backend = get_simulation_backend(simulation_backend)
-        self.sim = _sim_backend(init_task=init_task, task_registration_cfg=task_registration_cfg)
+        sim_backend_cls = get_simulation_backend(BackendType[simulation_backend])
+        self.sim = sim_backend_cls(init_task=init_task, task_registration_cfg=task_registration_cfg)
         self.write_states()
 
     @on_event("INPUT", "task")
     def update_task(self, event: dict) -> None:
         """Event handler for processing task updates."""
         new_task = event["value"].to_numpy(zero_copy_only=False)[0]
-        self.sim.set_task(new_task)
+        self.sim.create_task(new_task)
 
     def spin(self) -> None:
         """Spin logic for the simulation node."""
@@ -72,5 +75,6 @@ class SimulationNode(DoraNode):
     def update_control(self, event: dict) -> None:
         """Event handler for processing controls received from controller node."""
         spline_data = from_arrow(event["value"], event["metadata"], SplineData)
-        control = spline_data.spline()
-        self.sim.update_control(control)
+        print("AAAAAAAA", spline_data)
+        control = spline_data.nominal_spline()
+        self.sim.update_nominal_control_spline(control)

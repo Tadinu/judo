@@ -4,9 +4,11 @@ from typing import Callable
 
 import numpy as np
 
+from judo import BackendType
 from judo.controller import Controller, ControllerConfig, make_controller
 from judo.optimizers import Optimizer, OptimizerConfig, get_registered_optimizers
 from judo.tasks import CylinderPush
+
 
 # ##### #
 # MOCKS #
@@ -49,7 +51,7 @@ def test_max_opt_iters(temp_np_seed: Callable) -> None:
         controller = make_controller(
             init_task="cylinder_push",
             init_optimizer="cem",
-            rollout_backend="mujoco",
+            rollout_backend=BackendType.MUJOCO,
         )
         controller.controller_cfg = ControllerConfig(max_opt_iters=max_opt_iters)
         controller.optimizer = opt
@@ -58,14 +60,14 @@ def test_max_opt_iters(temp_np_seed: Callable) -> None:
     # generate a solution using max_opt_iters=1
     with temp_np_seed(42):
         opt1, controller1 = _setup_controller(max_opt_iters=1)
-        controller1.current_state = np.random.rand(controller1.task.model.nq + controller1.task.model.nv)
+        controller1.mj_current_state = np.random.rand(controller1.task.mj_model.nq + controller1.task.mj_model.nv)
         controller1.time = 0.0
         controller1.update_action()
 
     # generate a solution using max_opt_iters=2
     with temp_np_seed(42):
         opt2, controller2 = _setup_controller(max_opt_iters=2)
-        controller2.current_state = np.random.rand(controller2.task.model.nq + controller2.task.model.nv)
+        controller2.mj_current_state = np.random.rand(controller2.task.mj_model.nq + controller2.task.mj_model.nv)
         controller2.time = 0.0
         controller2.update_action()
 
@@ -87,7 +89,7 @@ def test_update_action() -> None:
         controller = make_controller(
             init_task="cylinder_push",
             init_optimizer="cem",
-            rollout_backend="mujoco",
+            rollout_backend=BackendType.MUJOCO,
         )
         controller.optimizer = opt
         return controller
@@ -95,7 +97,7 @@ def test_update_action() -> None:
     # test with all registered optimizers
     for _opt_name, (opt_cls, opt_cfg) in get_registered_optimizers().items():
         controller = _setup_controller(opt_cls, opt_cfg)
-        controller.current_state = np.random.rand(controller.task.model.nq + controller.task.model.nv)
+        controller.mj_current_state = np.random.rand(controller.task.mj_model.nq + controller.task.mj_model.nv)
         controller.time = 0.0
 
         # check that update_action runs without error

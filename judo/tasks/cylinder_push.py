@@ -1,7 +1,8 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Optional
+from pathlib import Path
 
 import mujoco
 import numpy as np
@@ -20,6 +21,7 @@ XML_PATH = str(MODEL_PATH / "xml/cylinder_push.xml")
 class CylinderPushConfig(TaskConfig):
     """Reward configuration for the cylinder push task."""
 
+    task_name: str = "cylinder_push"
     w_pusher_proximity: float = 0.5
     w_pusher_velocity: float = 0.0
     w_cart_position: float = 0.1
@@ -39,20 +41,19 @@ class CylinderPushConfig(TaskConfig):
 class CylinderPush(Task[CylinderPushConfig]):
     """Defines the cylinder push balancing task."""
 
-    name: str = "cylinder_push"
     config_t: type[CylinderPushConfig] = CylinderPushConfig
 
-    def __init__(self, model_path: str = XML_PATH, sim_model_path: str | None = None) -> None:
+    def __init__(self, xml_path: str = XML_PATH, sim_xml_path: Optional[Path | str] = None) -> None:
         """Initializes the cylinder push task."""
-        super().__init__(model_path=model_path, sim_model_path=sim_model_path)
+        super().__init__(xml_path=xml_path, sim_xml_path=sim_xml_path)
         self.reset()
 
     def reward(
-        self,
-        states: np.ndarray,
-        sensors: np.ndarray,
-        controls: np.ndarray,
-        system_metadata: dict[str, Any] | None = None,
+            self,
+            states: np.ndarray,
+            sensors: np.ndarray,
+            controls: np.ndarray,
+            system_metadata: dict[str, Any] | None = None,
     ) -> np.ndarray:
         """Implements the cylinder push reward from MJPC.
 
@@ -95,7 +96,7 @@ class CylinderPush(Task[CylinderPushConfig]):
     def reset(self) -> None:
         """Resets the model to a default (random) state."""
         theta = 2 * np.pi * np.random.rand(2)
-        self.data.qpos = np.array(
+        self.mj_data.qpos = np.array(
             [
                 np.cos(theta[0]),
                 np.sin(theta[0]),
@@ -103,5 +104,5 @@ class CylinderPush(Task[CylinderPushConfig]):
                 2 * np.sin(theta[1]),
             ]
         )
-        self.data.qvel = np.zeros(4)
-        mujoco.mj_forward(self.model, self.data)
+        self.mj_data.qvel = np.zeros(4)
+        mujoco.mj_forward(self.mj_model, self.mj_data)

@@ -2,19 +2,24 @@
 
 import warnings
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Callable, Literal, Union, Optional
+import enum
 
+import newton
 import numpy as np
+import warp as wp
 from omegaconf import DictConfig
 from scipy.interpolate import interp1d
 
+# judo
+from judo import BackendType
 from judo.app.structs import MujocoState, SplineData
 from judo.app.utils import register_optimizers_from_cfg, register_tasks_from_cfg
-from judo.config import OverridableConfig
+from judo.config import OverridableConfig, get_override_config
 from judo.gui import slider
 from judo.optimizers import Optimizer, OptimizerConfig, get_registered_optimizers
 from judo.tasks import Task, TaskConfig, get_registered_tasks
-from judo.utils.mujoco import RolloutBackend, make_model_data_pairs
+from judo.utils.mujoco import MJRolloutBackend, mj_make_model_data_pairs
 from judo.utils.normalization import (
     IdentityNormalizer,
     Normalizer,
@@ -22,7 +27,17 @@ from judo.utils.normalization import (
     make_normalizer,
     normalizer_registry,
 )
-from judo.visualizers.utils import get_trace_sensors
+from judo.visualizers.utils import get_mj_trace_sensors
+from judo.simulation.mj_simulation import MJSimulation
+from judo.simulation.nt_simulation import NTSimulation
+from judo.utils.newton import NewtonBackend
+
+
+class SplineType(enum.Enum):
+    ZERO = enum.auto()
+    LINEAR = enum.auto()
+    QUADRATIC = enum.auto()
+    CUBIC = enum.auto()
 
 
 @slider("horizon", 0.1, 10.0, bounded=True)
@@ -31,23 +46,23 @@ from judo.visualizers.utils import get_trace_sensors
 class ControllerConfig(OverridableConfig):
     """Base controller config."""
 
-    horizon: float = 1.0
-    spline_order: Literal["zero", "linear", "cubic"] = "linear"
+    horizon: float = 0.25  # 1.0
+    spline_order: str = SplineType.LINEAR.name
     control_freq: float = 20.0
     max_opt_iters: int = 1
     max_num_traces: int = 5
-    action_normalizer: Literal["none", "min_max", "running"] = "none"
+    action_normalizer: str = NormalizerType.NONE.name
 
 
 class Controller:
     """The controller object."""
 
     def __init__(
-        self,
-        controller_config: ControllerConfig,
-        task: Task,
-        optimizer: Optimizer,
-        rollout_backend: Literal["mujoco"] = "mujoco",
+            self,
+            controller_config: ControllerConfig,
+            task: Task,
+            optimizer: Optimizer,
+            rollout_backend: BackendType = BackendType.MUJOCO,
     ) -> None:
         """Initialize the controller.
 
@@ -55,7 +70,7 @@ class Controller:
             controller_config: The controller configuration.
             task: The task to use.
             optimizer: The optimizer to use.
-            rollout_backend: The backend to use for rollouts. Currently only "mujoco" is supported.
+            rollout_backend: The backend to use for rollouts. Currently only BackendType.MUJOCO is supported.
         """
         self._controller_cfg = controller_config
         self.task = task
@@ -64,28 +79,61 @@ class Controller:
         self.available_optimizers = get_registered_optimizers()
         self.available_tasks = get_registered_tasks()
 
-        self.model = self.task.model
-        self.model_data_pairs = make_model_data_pairs(self.model, self.optimizer_cfg.num_rollouts)
+        # Newton
+        is_newton = rollout_backend == BackendType.NEWTON
+        self.nt_rollout_backend = NewtonBackend(task.config.joint_names, num_substeps=20,
+                                                for_rollout=True,
+                                                rollout_timesteps=self.num_timesteps) if is_newton else None
+        if self.nt_rollout_backend:
+            assert task.nt_num_rollout_worlds == self.optimizer_cfg.num_rollouts
+            self.nt_rollout_backend.set_model(self.task.nt_rollout_model, self.task.nt_rollout_model_builder)
+        else:
+            assert self.task.mj_model, f"MuJoCo model must be valid for the controller with rollout backend {rollout_backend}"
 
-        self.rollout_backend = RolloutBackend(num_threads=self.optimizer_cfg.num_rollouts, backend=rollout_backend)
+        # MuJoCo
+        self.mj_model = self.task.mj_model if rollout_backend == BackendType.MUJOCO else None
+        self.mj_model_data_pairs = mj_make_model_data_pairs(self.mj_model,
+                                                            self.optimizer_cfg.num_rollouts) if self.mj_model else None
+        self.mj_rollout_backend = MJRolloutBackend(num_threads=self.optimizer_cfg.num_rollouts, backend=rollout_backend) \
+            if self.mj_model else None
+        self.mj_states = np.zeros(
+            (self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nq + self.mj_model.nv)) \
+            if self.mj_model else None
+        self.mj_current_state = np.concatenate(
+            [self.task.mj_data.qpos, self.task.mj_data.qvel]) if self.mj_model else None
+        self.mj_sensors = np.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nsensordata)) \
+            if self.mj_model else None
+
+        # Controls
+        self.rollout_controls = np.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nu)) \
+            if self.mj_model else None
+        self.map_controls: Callable = None
+
+        # Action (must be after rollout backend init)
         self.action_normalizer = self._init_action_normalizer()
 
-        # a container for any metadata from the system that we want to pass to the task
+        # A container for any metadata from the system that we want to pass to the task
         self.system_metadata = {}
 
-        self.states = np.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.model.nq + self.model.nv))
-        self.current_state = np.concatenate([self.task.data.qpos, self.task.data.qvel])
-        self.sensors = np.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.model.nsensordata))
-        self.rollout_controls = np.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.model.nu))
+        # Rewards
         self.rewards = np.zeros((self.optimizer_cfg.num_rollouts,))
         self.reset()
 
+        # Traces
         self.traces = None
-        self.trace_sensors = get_trace_sensors(self.model)
-        self.num_trace_elites = min(self.max_num_traces, len(self.rewards))
-        self.num_trace_sensors = len(self.trace_sensors)
+        self.mj_trace_sensors = get_mj_trace_sensors(self.mj_model) if self.mj_model else None
+        self.num_trace_elites = min(self.max_num_traces, len(self.rewards)) if self.mj_model else 0
+        self.num_trace_sensors = len(self.mj_trace_sensors) if self.mj_model else 0
         self.sensor_rollout_size = self.num_timesteps - 1
         self.all_traces_rollout_size = self.sensor_rollout_size * self.num_trace_sensors
+
+    @property
+    def nt_rollout_model(self) -> newton.Model:
+        return self.task.nt_rollout_model
+
+    @property
+    def nt_rollout_model_builder(self) -> newton.ModelBuilder:
+        return self.task.nt_rollout_model_builder
 
     @property
     def horizon(self) -> float:
@@ -108,19 +156,19 @@ class Controller:
         return self.controller_cfg.max_opt_iters
 
     @property
-    def spline_order(self) -> str:
+    def spline_order(self) -> SplineType:
         """Helper function to recalculate the spline order for simulation."""
-        return self.controller_cfg.spline_order
+        return SplineType[self.controller_cfg.spline_order]
 
     @property
-    def spline_data(self) -> SplineData:
+    def nominal_spline_data(self) -> SplineData:
         """Helper function to get the spline data."""
         return SplineData(self.times, self.nominal_knots)
 
     @property
     def action_normalizer_type(self) -> NormalizerType:
         """Helper function to get the type of action normalizer."""
-        return self.controller_cfg.action_normalizer
+        return NormalizerType[self.controller_cfg.action_normalizer]
 
     @property
     def num_timesteps(self) -> int:
@@ -190,22 +238,31 @@ class Controller:
 
     def update_action(self) -> None:
         """Abstract method for updating controller actions from current state/time."""
-        assert self.current_state.shape == (self.model.nq + self.model.nv,), "Current state must be of shape (nq + nv,)"
+        if self.mj_model:
+            assert self.mj_current_state.shape == (
+                self.mj_model.nq + self.mj_model.nv,), "Current state must be of shape (nq + nv,)"
         assert self.optimizer_cfg.num_rollouts > 0, "Need at least one rollout!"
 
-        if self.optimizer_cfg.num_nodes < 4 and self.spline_order == "cubic":
+        if self.optimizer_cfg.num_nodes < 4 and self.spline_order == SplineType.CUBIC:
             warnings.warn("Cubic splines require at least 4 nodes. Setting num_nodes=4.", stacklevel=2)
             self.optimizer_cfg.num_nodes = 4
 
         # Adjust time + move policy forward.
         new_times = self.time + self.spline_timesteps
-        nominal_knots = self.spline(new_times)
+        nominal_knots = self.nominal_spline(new_times)
         nominal_knots_normalized = self.action_normalizer.normalize(nominal_knots)
 
         # resizing any variables due to changes in the GUI
-        if len(self.model_data_pairs) != self.optimizer_cfg.num_rollouts:
-            self.model_data_pairs = make_model_data_pairs(self.model, self.optimizer_cfg.num_rollouts)
-            self.rollout_backend.update(self.optimizer_cfg.num_rollouts)
+        if self.mj_model:
+            if len(self.mj_model_data_pairs) != self.optimizer_cfg.num_rollouts:
+                self.mj_model_data_pairs = mj_make_model_data_pairs(self.mj_model, self.optimizer_cfg.num_rollouts)
+                self.mj_rollout_backend.update(self.optimizer_cfg.num_rollouts)
+        else:
+            assert self.nt_rollout_model
+            if self.nt_rollout_model_builder.num_worlds != self.optimizer_cfg.num_rollouts:
+                self.task.nt_init_models(self.optimizer_cfg.num_rollouts)
+                if self.nt_rollout_backend.model != self.nt_rollout_model:
+                    self.nt_rollout_backend.set_model(self.nt_rollout_model, self.nt_rollout_model_builder)
 
         normalizer_cls = normalizer_registry.get(self.action_normalizer_type)
         if normalizer_cls is None:
@@ -238,28 +295,50 @@ class Controller:
             self.candidate_knots = self.action_normalizer.denormalize(candidate_knots_normalized)
 
             # Evaluate rollout controls at sim timesteps.
-            candidate_splines = make_spline(new_times, self.candidate_knots, self.spline_order)
-            self.rollout_controls = candidate_splines(self.time + self.rollout_times)
+            candidate_spline = make_spline(new_times, self.candidate_knots, self.spline_order)
+            self.rollout_controls = candidate_spline(self.time + self.rollout_times)
+
+            # Map algo's candidate controls to final ones that match model's configuration space.
+            # Eg: Jacobian map to transform EE vel to joint vels, PCA map to transform PCA grasp values to finger joints
+            if self.map_controls:
+                self.rollout_controls = self.map_controls(self.rollout_controls)
 
             # Roll out dynamics with action sequences.
-            self.task.pre_rollout(self.current_state)
-            self.states, self.sensors = self.rollout_backend.rollout(
-                self.model_data_pairs,
-                self.current_state,
-                self.rollout_controls,
-            )
-            self.task.post_rollout(
-                self.states,
-                self.sensors,
-                self.rollout_controls,
-                self.system_metadata,
-            )
-            self.rewards = self.task.reward(
-                self.states,
-                self.sensors,
-                self.rollout_controls,
-                self.system_metadata,
-            )
+            if self.mj_model:
+                self.task.pre_rollout(self.mj_current_state)
+                self.mj_states, self.mj_sensors = self.mj_rollout_backend.rollout(self.mj_model_data_pairs,
+                                                                                  self.mj_current_state,
+                                                                                  self.rollout_controls)
+                self.task.post_rollout(
+                    self.mj_states,
+                    self.mj_sensors,
+                    self.rollout_controls,
+                    self.system_metadata,
+                )
+                self.rewards = self.task.reward(
+                    self.mj_states,
+                    self.mj_sensors,
+                    self.rollout_controls,
+                    self.system_metadata,
+                )
+            else:
+                # [self.rollout_controls] -> [self.nt_rollout_backend.rollout_model_ctrls' joint_target_pos]
+                for i in range(len(self.nt_rollout_backend.rollout_model_ctrls)):
+                    control = self.nt_rollout_backend.rollout_model_ctrls[i]
+                    control.joint_target_pos = wp.array(np.hstack(self.rollout_controls[:, i, :].squeeze()),
+                                                        dtype=control.joint_target_pos.dtype,
+                                                        device=control.joint_target_pos.device)
+
+                # Rollout backend with updated [joint_target_controls]
+                self.nt_rollout_backend.step()
+
+                # Get rollout rewards
+                self.rewards = self.task.nt_reward(
+                    self.nt_rollout_backend.rollout_states,
+                    self.nt_rollout_backend.rollout_contacts,
+                    self.nt_rollout_backend.rollout_model_ctrls,
+                    self.system_metadata,
+                )
 
             # Update nominal knots for next optimization iteration
             nominal_knots_normalized = self.optimizer.update_nominal_knots(candidate_knots_normalized, self.rewards)
@@ -272,27 +351,28 @@ class Controller:
         # Update nominal controls and spline.
         self.nominal_knots = self.action_normalizer.denormalize(nominal_knots_normalized)
         self.times = new_times
-        self.update_spline(self.times, self.nominal_knots)
+        self.update_optimal_spline(self.times, self.nominal_knots)
         self.update_traces()
 
     def action(self, time: float) -> np.ndarray:
         """Current best action of policy."""
-        return self.spline(time)
+        return self.nominal_spline(time)
 
-    def update_spline(self, times: np.ndarray, controls: np.ndarray) -> None:
+    def update_optimal_spline(self, times: np.ndarray, nominal_controls: np.ndarray) -> None:
         """Update the spline with new timesteps / controls."""
-        self.spline = make_spline(times, controls, self.spline_order)
+        self.nominal_spline = make_spline(times, nominal_controls, self.spline_order)
+        self.task.sim.nominal_control_spline = self.nominal_spline
 
     def reset(self) -> None:
         """Reset the controls, candidate controls and the spline to their default values."""
         self.task.reset()
-        if self.optimizer_cfg.num_nodes < 4 and self.spline_order == "cubic":
+        if self.optimizer_cfg.num_nodes < 4 and self.spline_order == SplineType.CUBIC:
             warnings.warn("Cubic splines require at least 4 nodes. Setting num_nodes=4.", stacklevel=2)
             self.optimizer_cfg.num_nodes = 4
         self.nominal_knots = np.tile(self.task.optimizer_warm_start(), (self.optimizer_cfg.num_nodes, 1))
         self.candidate_knots = np.tile(self.nominal_knots, (self.optimizer_cfg.num_rollouts, 1, 1))
-        self.times = self.task.data.time + self.spline_timesteps
-        self.update_spline(self.times, self.nominal_knots)
+        self.times = self.task.time + self.spline_timesteps
+        self.update_optimal_spline(self.times, self.nominal_knots)
 
     def update_traces(self) -> None:
         """Update traces by extracting data from sensors readings.
@@ -302,58 +382,65 @@ class Controller:
         (num_elite * num_trace_sensors * size of a single rollout x 2 (first and last point of spline) x 3 (3d pos))
         """
         # Resize traces if forced by config change.
-        self.sensor_rollout_size = self.num_timesteps - 1
-        self.all_traces_rollout_size = self.sensor_rollout_size * self.num_trace_sensors
-        if self.num_trace_elites != min(self.max_num_traces, self.optimizer_cfg.num_rollouts):
-            self.num_trace_elites = min(self.max_num_traces, self.optimizer_cfg.num_rollouts)
-        sensors = np.repeat(self.sensors, 2, axis=1)
+        if self.mj_model:
+            self.sensor_rollout_size = self.num_timesteps - 1
+            self.all_traces_rollout_size = self.sensor_rollout_size * self.num_trace_sensors
+            if self.num_trace_elites != min(self.max_num_traces, self.optimizer_cfg.num_rollouts):
+                self.num_trace_elites = min(self.max_num_traces, self.optimizer_cfg.num_rollouts)
+            sensors = np.repeat(self.mj_sensors, 2, axis=1)
 
-        # Order the actions from best to worst so that the first `num_trace_sensors` x `num_nodes` traces
-        # correspond to the best rollout and are using a special colors
-        elite_actions = np.argsort(self.rewards)[-self.num_trace_elites :][::-1]
+            # Order the actions from best to worst so that the first `num_trace_sensors` x `num_nodes` traces
+            # correspond to the best rollout and are using a special colors
+            elite_actions = np.argsort(self.rewards)[-self.num_trace_elites:][::-1]
 
-        total_traces_rollouts = int(self.num_trace_elites * self.num_trace_sensors * self.sensor_rollout_size)
-        # Calculates list of the elite indicies
-        trace_inds = [self.model.sensor_adr[id] + pos for id in self.trace_sensors for pos in range(3)]
+            total_traces_rollouts = int(self.num_trace_elites * self.num_trace_sensors * self.sensor_rollout_size)
+            # Calculates list of the elite indicies
+            trace_inds = [self.mj_model.sensor_adr[id] + pos for id in self.mj_trace_sensors for pos in range(3)]
 
-        # Filter out the non-elite indices we don't care about
-        sensors = sensors[elite_actions, :, :]
-        # Remove everything but the trace sensors we care about, leaving htis column as size num_trace_sensors * 3
-        sensors = sensors[:, :, trace_inds]
-        # Remove the first and last part the trajectory to form line segments properly
-        # Array will be doubled and look something like: [(0, 0), (1, 1), (4, 4)]
-        # We want it to look like: [(0, 1), (1, 4)]
-        sensors = sensors[:, 1:-1, :]
+            # Filter out the non-elite indices we don't care about
+            sensors = sensors[elite_actions, :, :]
+            # Remove everything but the trace sensors we care about, leaving htis column as size num_trace_sensors * 3
+            sensors = sensors[:, :, trace_inds]
+            # Remove the first and last part the trajectory to form line segments properly
+            # Array will be doubled and look something like: [(0, 0), (1, 1), (4, 4)]
+            # We want it to look like: [(0, 1), (1, 4)]
+            sensors = sensors[:, 1:-1, :]
 
-        # We doubled it so the number of entries is going to be the size of the rollout * 2
-        separated_sensors_size = (self.num_trace_elites, self.sensor_rollout_size, 2, 3)
+            # We doubled it so the number of entries is going to be the size of the rollout * 2
+            separated_sensors_size = (self.num_trace_elites, self.sensor_rollout_size, 2, 3)
 
-        # Each block of (i, self.sensor_rollout_size) needs to be interleaved together into a stack of
-        # [block(i, ), block (i + 1, ), ..., block(i + n)]
-        elites = np.zeros((self.num_trace_sensors * self.num_trace_elites, self.sensor_rollout_size, 2, 3))
-        for sensor in range(self.num_trace_sensors):
-            s1 = np.reshape(sensors[:, :, sensor * 3 : (sensor + 1) * 3], separated_sensors_size)
-            elites[sensor :: self.num_trace_sensors] = s1
-        self.traces = np.reshape(elites, (total_traces_rollouts, 2, 3))
+            # Each block of (i, self.sensor_rollout_size) needs to be interleaved together into a stack of
+            # [block(i, ), block (i + 1, ), ..., block(i + n)]
+            elites = np.zeros((self.num_trace_sensors * self.num_trace_elites, self.sensor_rollout_size, 2, 3))
+            for sensor in range(self.num_trace_sensors):
+                s1 = np.reshape(sensors[:, :, sensor * 3: (sensor + 1) * 3], separated_sensors_size)
+                elites[sensor:: self.num_trace_sensors] = s1
+            self.traces = np.reshape(elites, (total_traces_rollouts, 2, 3))
 
-    def update_states(self, state_msg: MujocoState) -> None:
+    def update_state(self, state: Union[MujocoState, newton.State]) -> None:
         """Updates the states."""
-        self.current_state = np.concatenate([state_msg.qpos, state_msg.qvel])
-        self.time = state_msg.time
-        self.system_metadata = state_msg.sim_metadata
+        if self.mj_model:
+            self.mj_current_state = np.concatenate([state.qpos, state.qvel])
+            self.time = state.time
+            self.system_metadata = state.sim_metadata
+        else:
+            # Write sim-backend's state -> rollout-backend's state
+            self.task.nt_copy_sim_to_rollout_state(sim_state=state, rollout_state=self.nt_rollout_backend.state_0,
+                                                   num_rollout_worlds=self.nt_rollout_backend.model_builder.num_worlds)
 
     def _init_action_normalizer(self) -> Normalizer:
         """Initialize the action normalizer."""
         action_normalizer_kwargs = {}
-        if self.action_normalizer_type == "min_max":
-            action_normalizer_kwargs["min"] = self.task.actuator_ctrlrange[:, 0]
-            action_normalizer_kwargs["max"] = self.task.actuator_ctrlrange[:, 1]
-        elif self.action_normalizer_type == "running":
-            action_normalizer_kwargs["init_std"] = 1.0  # TODO(yunhai): make this configurable
-        return make_normalizer(self.action_normalizer_type, self.model.nu, **action_normalizer_kwargs)
+        match self.action_normalizer_type:
+            case NormalizerType.MIN_MAX:
+                action_normalizer_kwargs["min"] = self.task.actuator_ctrlrange[:, 0]
+                action_normalizer_kwargs["max"] = self.task.actuator_ctrlrange[:, 1]
+            case NormalizerType.RUNNING:
+                action_normalizer_kwargs["init_std"] = 1.0  # TODO(yunhai): make this configurable
+        return make_normalizer(self.action_normalizer_type, self.nu, **action_normalizer_kwargs)
 
 
-def make_spline(times: np.ndarray, controls: np.ndarray, spline_order: str) -> interp1d:
+def make_spline(times: np.ndarray, controls: np.ndarray, spline_order: SplineType) -> interp1d:
     """Helper function for creating spline objects.
 
     Args:
@@ -367,7 +454,7 @@ def make_spline(times: np.ndarray, controls: np.ndarray, spline_order: str) -> i
     return interp1d(
         times,
         controls,
-        kind=spline_order,
+        kind=spline_order.name.lower(),
         axis=-2,
         copy=False,
         fill_value=fill_value,  # interp1d is incorrectly typed # type: ignore
@@ -376,11 +463,12 @@ def make_spline(times: np.ndarray, controls: np.ndarray, spline_order: str) -> i
 
 
 def make_controller(
-    init_task: str,
-    init_optimizer: str,
-    task_registration_cfg: DictConfig | None = None,
-    optimizer_registration_cfg: DictConfig | None = None,
-    rollout_backend: Literal["mujoco"] = "mujoco",
+        sim: Union[MJSimulation, NTSimulation],
+        init_task: Union[Task, str],
+        init_optimizer: str,
+        task_registration_cfg: Optional[DictConfig] = None,
+        optimizer_registration_cfg: Optional[DictConfig] = None,
+        rollout_backend: BackendType = BackendType.MUJOCO,
 ) -> Controller:
     """Make a controller."""
     available_optimizers = get_registered_optimizers()
@@ -392,19 +480,26 @@ def make_controller(
 
     task_entry = available_tasks.get(init_task)
     optimizer_entry = available_optimizers.get(init_optimizer)
-
-    assert task_entry is not None, f"Task {init_task} not found in task registry."
     assert optimizer_entry is not None, f"Optimizer {init_optimizer} not found in optimizer registry."
 
     # instantiate the task/optimizer/controller
-    task_cls, _ = task_entry
-    task = task_cls()
+    if isinstance(init_task, Task):
+        task = init_task
+    else:
+        assert task_entry is not None, f"Task {init_task} not found in task registry."
+        task_cls, _ = task_entry
+        task = task_cls(sim)
+    print("Task:", task.config)
+    task_name = task.config.task_name
 
     optimizer_cls, optimizer_config_cls = optimizer_entry
-    optimizer = optimizer_cls(optimizer_config_cls(), task.nu)
+    # Refer to optimizers/overrides.py for task-specific configs
+    optimizer = optimizer_cls(optimizer_config_cls(), task.nu, override_task_name=task_name)
+    print("Optimizer:", optimizer.config)
 
     controller_cfg = ControllerConfig()
-    controller_cfg.set_override(init_task)
+    controller_cfg.set_override(task_name)
+    print("Controller:", controller_cfg)
 
     return Controller(
         controller_config=controller_cfg,

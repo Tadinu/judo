@@ -104,4 +104,4 @@ custom_tasks: null
 custom_optimizers: null
 controller_config_overrides: null
 optimizer_config_overrides: null
-simulation_backend: mujoco
+simulation_backend: "MUJOCO"

@@ -63,9 +63,9 @@ class OverridableConfig:
 
 
 def set_config_overrides(
-    override_key: str,
-    cls: type,
-    field_override_values: dict[str, Any],
+        override_key: str,
+        cls: type,
+        field_override_values: dict[str, Any],
 ) -> None:
     """Modify the override registry to include an override key and value.
 
@@ -94,3 +94,7 @@ def set_config_overrides(
                 UserWarning,
                 stacklevel=2,
             )
+
+
+def get_override_config(config_cls, task_name: str) -> dict:
+    return _OVERRIDE_REGISTRY[config_cls][task_name]

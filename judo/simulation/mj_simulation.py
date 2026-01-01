@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
+from typing import Optional
 from mujoco import mj_step
 from omegaconf import DictConfig
 
@@ -17,20 +18,20 @@ class MJSimulation(Simulation):
     """
 
     def __init__(
-        self,
-        init_task: str = "cylinder_push",
-        task_registration_cfg: DictConfig | None = None,
+            self,
+            init_task: str = "cylinder_push",
+            task_registration_cfg: Optional[DictConfig] = None,
     ) -> None:
         """Initialize the simulation node."""
         super().__init__(init_task=init_task, task_registration_cfg=task_registration_cfg)
 
     def step(self) -> None:
         """Step the simulation forward by one timestep."""
-        if self.control is not None and not self.paused:
+        if self.nominal_control_spline is not None and not self.paused:
             try:
-                self.task.data.ctrl[:] = self.control(self.task.data.time)
+                self.task.mj_data.ctrl[:] = self.nominal_control_spline(self.task.mj_data.time)[:self.task.nu]
                 self.task.pre_sim_step()
-                mj_step(self.task.sim_model, self.task.data)
+                mj_step(self.task.mj_sim_model, self.task.mj_data)
                 self.task.post_sim_step()
             except ValueError:
                 # we're switching tasks and the new task has a different number of actuators
@@ -40,17 +41,17 @@ class MJSimulation(Simulation):
     def sim_state(self) -> MujocoState:
         """Returns the current simulation state."""
         return MujocoState(
-            time=self.task.data.time,
-            qpos=self.task.data.qpos,
-            qvel=self.task.data.qvel,
-            xpos=self.task.data.xpos,
-            xquat=self.task.data.xquat,
-            mocap_pos=self.task.data.mocap_pos,
-            mocap_quat=self.task.data.mocap_quat,
+            time=self.task.mj_data.time,
+            qpos=self.task.mj_data.qpos,
+            qvel=self.task.mj_data.qvel,
+            xpos=self.task.mj_data.xpos,
+            xquat=self.task.mj_data.xquat,
+            mocap_pos=self.task.mj_data.mocap_pos,
+            mocap_quat=self.task.mj_data.mocap_quat,
             sim_metadata=self.task.get_sim_metadata(),
         )
 
     @property
     def timestep(self) -> float:
         """Returns the simulation timestep."""
-        return self.task.sim_model.opt.timestep
+        return self.task.mj_sim_model.opt.timestep

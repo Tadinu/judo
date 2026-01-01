@@ -21,7 +21,7 @@ custom_optimizers:
 controller_config_overrides:
   my_cylinder_push:
     horizon: 1.0
-    spline_order: "zero"
+    spline_order: ZERO
 
 optimizer_config_overrides:
   my_cylinder_push:

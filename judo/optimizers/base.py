@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Generic, TypeVar
+from typing import Generic, TypeVar, Optional
 
 import numpy as np
 
@@ -15,7 +15,7 @@ from judo.gui import slider
 class OptimizerConfig(OverridableConfig):
     """Base class for all optimizer configurations."""
 
-    num_rollouts: int = 16
+    num_rollouts: int = 32
     num_nodes: int = 4
     use_noise_ramp: bool = False
     noise_ramp: float = 2.5
@@ -27,7 +27,7 @@ OptimizerConfigT = TypeVar("OptimizerConfigT", bound=OptimizerConfig)
 class Optimizer(ABC, Generic[OptimizerConfigT]):
     """Base class for all optimizers."""
 
-    def __init__(self, config: OptimizerConfigT, nu: int, override_task_name: str | None = None) -> None:
+    def __init__(self, config: OptimizerConfigT, nu: int, override_task_name: Optional[str] = None) -> None:
         """Initialize the optimizer."""
         self.config = config
         self.nu = nu
