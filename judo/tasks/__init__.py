@@ -10,6 +10,7 @@ from judo.tasks.fr3_pick import FR3Pick, FR3PickConfig
 from judo.tasks.leap_cube import LeapCube, LeapCubeConfig
 from judo.tasks.leap_cube_down import LeapCubeDown, LeapCubeDownConfig
 from judo.tasks.allegro_cube import AllegroCube, AllegroCubeConfig
+from judo.tasks.iiwa7_allegro_pick import IIWA7AllegroPick, IIWA7AllegroPickConfig
 
 _registered_tasks: Dict[str, Tuple[Type[Task], Type[TaskConfig]]] = {
     CylinderPush.config_t.task_name: (CylinderPush, CylinderPushConfig),
@@ -19,6 +20,7 @@ _registered_tasks: Dict[str, Tuple[Type[Task], Type[TaskConfig]]] = {
     LeapCubeDown.config_t.task_name: (LeapCubeDown, LeapCubeDownConfig),
     CaltechLeapCube.config_t.task_name: (CaltechLeapCube, CaltechLeapCubeConfig),
     AllegroCube.config_t.task_name: (AllegroCube, AllegroCubeConfig),
+    IIWA7AllegroPick.config_t.task_name: (AllegroCube, AllegroCubeConfig),
 }
 
 
