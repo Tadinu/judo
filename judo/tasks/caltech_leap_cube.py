@@ -1,24 +1,14 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
-from dataclasses import dataclass
+from typing import Any, Optional, Union
+from pathlib import Path
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from judo import MODEL_PATH
 from judo.gui import slider
 from judo.tasks.leap_cube import LeapCube, LeapCubeConfig
-
-XML_PATH = str(MODEL_PATH / "xml/caltech_leap_cube.xml")
-SIM_XML_PATH = str(MODEL_PATH / "xml/caltech_leap_cube_sim.xml")
-QPOS_HOME = np.array(
-    [
-        0.11, 0.005, 0.04, 1.0, 0.0, 0.0, 0.0,  # cube
-        0.5, -0.75, 0.75, 0.25,  # index
-        0.5, 0.0, 0.75, 0.25,  # middle
-        0.5, 0.75, 0.75, 0.25,  # ring
-        0.65, 0.9, 0.75, 0.6,  # thumb
-    ]
-)  # fmt: skip
 
 
 @slider("w_pos", 0.0, 200.0)
@@ -27,6 +17,17 @@ QPOS_HOME = np.array(
 class CaltechLeapCubeConfig(LeapCubeConfig):
     """Reward configuration LEAP cube rotation task."""
     task_name: str = "caltech_leap_cube"
+    xml_path: Optional[Union[Path, str]] = str(MODEL_PATH / "xml/caltech_leap_cube.xml")
+    sim_xml_path: Optional[Union[Path, str]] = str(MODEL_PATH / "xml/caltech_leap_cube_sim.xml")
+    qpos_home: Optional[np.ndarray] = field(default_factory=lambda: np.array(
+        [
+            0.11, 0.005, 0.04, 1.0, 0.0, 0.0, 0.0,  # cube
+            0.5, -0.75, 0.75, 0.25,  # index
+            0.5, 0.0, 0.75, 0.25,  # middle
+            0.5, 0.75, 0.75, 0.25,  # ring
+            0.65, 0.9, 0.75, 0.6,  # thumb
+        ]
+    ))  # fmt: skip
 
 
 class CaltechLeapCube(LeapCube):
@@ -34,12 +35,12 @@ class CaltechLeapCube(LeapCube):
 
     config_t: type[CaltechLeapCubeConfig] = CaltechLeapCubeConfig
 
-    def __init__(self, xml_path: str = XML_PATH, sim_xml_path: str = SIM_XML_PATH) -> None:
+    def __init__(self) -> None:
         """Initializes the LEAP cube rotation task."""
-        super(LeapCube, self).__init__(xml_path=xml_path, sim_xml_path=sim_xml_path)
+        super().__init__()
         self.goal_pos = np.array([0.11, 0.005, 0.03])
         self.goal_quat = np.array([1.0, 0.0, 0.0, 0.0])
-        self.qpos_home = QPOS_HOME
+        self.qpos_home = self.config.qpos_home
         self.reset_command = np.array(
             [
                 0.5, -0.75, 0.75, 0.25,  # index

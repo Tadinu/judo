@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any, Optional, Union
 from pathlib import Path
 
 import mujoco
@@ -43,9 +43,9 @@ class CylinderPush(Task[CylinderPushConfig]):
 
     config_t: type[CylinderPushConfig] = CylinderPushConfig
 
-    def __init__(self, xml_path: str = XML_PATH, sim_xml_path: Optional[Path | str] = None) -> None:
+    def __init__(self) -> None:
         """Initializes the cylinder push task."""
-        super().__init__(xml_path=xml_path, sim_xml_path=sim_xml_path)
+        super().__init__()
         self.reset()
 
     def reward(

@@ -30,11 +30,11 @@ class TaskConfig:
     sim_backend: str = BackendType.MUJOCO.name
     task_name: str = ""
     joint_names: Optional[list[str]] = None
-    joint_q_size: int = 0
-    joint_qd_size: int = 0
-    body_q_size: int = 0
-    body_qd_size: int = 0
-    body_f_size: int = 0
+    total_joint_q_size: int = 0
+    total_joint_dq_size: int = 0
+    total_body_q_size: int = 0
+    total_body_qd_size: int = 0
+    total_body_f_size: int = 0
 
     def __post_init__(self):
         self.joint_names = []
@@ -132,11 +132,11 @@ class Task(ABC, Generic[ConfigT]):
         pass
 
     def nt_init_sim_to_rollout_copy_functions(self):
-        self.nt_kernel_tile_joint_q = wp_create_kernel_tile_array(self.config.joint_q_size)
-        self.nt_kernel_tile_joint_qd = wp_create_kernel_tile_array(self.config.joint_qd_size)
-        self.nt_kernel_tile_body_q = wp_create_kernel_tile_array(self.config.body_q_size)
-        self.nt_kernel_tile_body_qd = wp_create_kernel_tile_array(self.config.body_qd_size)
-        self.nt_kernel_tile_body_f = wp_create_kernel_tile_array(self.config.body_f_size)
+        self.nt_kernel_tile_joint_q = wp_create_kernel_tile_array(self.config.total_joint_q_size)
+        self.nt_kernel_tile_joint_qd = wp_create_kernel_tile_array(self.config.total_joint_dq_size)
+        self.nt_kernel_tile_body_q = wp_create_kernel_tile_array(self.config.total_body_q_size)
+        self.nt_kernel_tile_body_qd = wp_create_kernel_tile_array(self.config.total_body_qd_size)
+        self.nt_kernel_tile_body_f = wp_create_kernel_tile_array(self.config.total_body_f_size)
 
     def nt_copy_sim_to_rollout_state(self, sim_state: newton.State, rollout_state: newton.State,
                                      num_rollout_worlds: int):

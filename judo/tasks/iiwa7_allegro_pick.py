@@ -21,19 +21,6 @@ from judo.utils.warp import wp_pose_to_mj
 if TYPE_CHECKING:
     from judo.simulation.base import Simulation
 
-XML_PATH = str(MODEL_PATH / "xml" / "allegro_left_hand_with_cube.usda")
-SIM_XML_PATH = str(MODEL_PATH / "xml" / "allegro_left_hand_with_cube.usda")
-USD_PATH = None
-QPOS_HOME = np.array(
-    [
-        0.0, 0.03, 0.1, 1.0, 0.0, 0.0, 0.0,  # mug
-        0.5, -0.75, 0.75, 0.25,  # index
-        0.5, 0.0, 0.75, 0.25,  # middle
-        0.5, 0.75, 0.75, 0.25,  # ring
-        0.65, 0.9, 0.75, 0.6,  # thumb
-    ]
-)  # fmt: skip
-
 
 @slider("w_pos", 0.0, 200.0)
 @slider("w_rot", 0.0, 1.0)
@@ -43,6 +30,18 @@ class IIWA7AllegroPickConfig(TaskConfig):
 
     task_name: str = "iiwa7_allegro_pick"
     sim_backend: str = BackendType.MUJOCO.name
+
+    xml_path = str(MODEL_PATH / "xml" / "allegro_left_hand_with_cube.usda")
+    sim_xml_path = str(MODEL_PATH / "xml" / "allegro_left_hand_with_cube.usda")
+    qpos_home = np.array(
+        [
+            0.0, 0.03, 0.1, 1.0, 0.0, 0.0, 0.0,  # mug
+            0.5, -0.75, 0.75, 0.25,  # index
+            0.5, 0.0, 0.75, 0.25,  # middle
+            0.5, 0.75, 0.75, 0.25,  # ring
+            0.65, 0.9, 0.75, 0.6,  # thumb
+        ]
+    )  # fmt: skip
     w_pos: float = 100.0
     w_rot: float = 0.1
 
@@ -57,15 +56,11 @@ class IIWA7AllegroPick(Task[IIWA7AllegroPickConfig]):
 
     def __init__(self, sim: Optional[Simulation] = None, num_rollout_worlds: int = 1) -> None:
         """Initializes the ALLEGRO cube rotation task."""
-        backend = self.config_t().sim_backend_type()
-        super().__init__(sim, num_rollout_worlds=num_rollout_worlds,
-                         xml_path=XML_PATH if backend == BackendType.MUJOCO else None,
-                         sim_xml_path=SIM_XML_PATH if backend == BackendType.MUJOCO else None,
-                         usd_path=USD_PATH if backend == BackendType.NEWTON else None)
 
+        super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
         self.goal_pos = np.array([0.0, 0.03, 0.1])
         self.goal_quat = np.array([1.0, 0.0, 0.0, 0.0])
-        self.qpos_home = QPOS_HOME
+        self.qpos_home = self.config.qpos_home
         self.reset_command = np.array(
             [
                 0.5, -0.75, 0.75, 0.25,  # index

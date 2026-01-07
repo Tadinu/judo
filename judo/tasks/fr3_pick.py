@@ -2,7 +2,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Union
 from pathlib import Path
 
 import mujoco
@@ -108,9 +108,9 @@ class FR3Pick(Task[FR3PickConfig]):
 
     config_t: type[FR3PickConfig] = FR3PickConfig
 
-    def __init__(self, xml_path: str = XML_PATH, sim_xml_path: Optional[Path | str] = None) -> None:
+    def __init__(self) -> None:
         """Initializes the LEAP cube rotation task."""
-        super().__init__(xml_path=xml_path, sim_xml_path=sim_xml_path)
+        super().__init__()
         self.reset_command = np.array([0, 0, 0, -1.57079, 0, 1.57079, -0.7853, 0.0])
 
         # object indices

@@ -1,6 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Optional, Literal, TYPE_CHECKING
+from typing import Any, Optional, Union, TYPE_CHECKING
+from pathlib import Path
 import re
 import numpy as np
 
@@ -15,28 +16,13 @@ import warp as wp
 from judo import MODEL_PATH, BackendType
 from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
-from judo.tasks.leap_cube import LeapCube, XML_PATH as LEAP_CUBE_XML_PATH, SIM_XML_PATH as LEAP_CUBE_SIM_XML_PATH
-from judo.tasks.caltech_leap_cube import (QPOS_HOME as CALTECH_QPOS_HOME,
-                                          XML_PATH as CALTECH_XML_PATH,
-                                          SIM_XML_PATH as CALTECH_SIM_XML_PATH)
+from judo.tasks.leap_cube import LeapCubeConfig
+from judo.tasks.caltech_leap_cube import CaltechLeapCubeConfig
 from judo.utils.math_utils import quat_diff, quat_diff_so3
 from judo.utils.warp import wp_pose_to_mj
 
 if TYPE_CHECKING:
     from judo.simulation.base import Simulation
-
-XML_PATH = LEAP_CUBE_XML_PATH
-SIM_XML_PATH = LEAP_CUBE_SIM_XML_PATH
-USD_PATH = str(MODEL_PATH / "usd" / "allegro_left_hand_with_cube.usda")
-QPOS_HOME = CALTECH_QPOS_HOME if 'caltech' in XML_PATH else np.array(
-    [
-        0.0, 0.03, 0.1, 1.0, 0.0, 0.0, 0.0,  # cube
-        0.5, -0.75, 0.75, 0.25,  # index
-        0.5, 0.0, 0.75, 0.25,  # middle
-        0.5, 0.75, 0.75, 0.25,  # ring
-        0.65, 0.9, 0.75, 0.6,  # thumb
-    ]
-)  # fmt: skip
 
 
 @slider("w_pos", 0.0, 200.0)
@@ -47,11 +33,24 @@ class AllegroCubeConfig(TaskConfig):
 
     sim_backend: str = BackendType.MUJOCO.name
     task_name: str = "allegro_cube"
-    joint_q_size: int = 24
-    joint_qd_size: int = 23
-    body_q_size: int = 23
-    body_qd_size: int = 23
-    body_f_size: int = 23
+    xml_path: Optional[Union[Path, str]] = LeapCubeConfig().xml_path
+    sim_xml_path: Optional[Union[Path, str]] = LeapCubeConfig().sim_xml_path
+    usd_path: Optional[Union[Path, str]] = str(MODEL_PATH / "usd" / "allegro_left_hand_with_cube.usda")
+    qpos_home: Optional[np.ndarray] = CaltechLeapCubeConfig().qpos_home if 'caltech' in xml_path else field(
+        default_factory=lambda: np.array(
+            [
+                0.0, 0.03, 0.1, 1.0, 0.0, 0.0, 0.0,  # cube
+                0.5, -0.75, 0.75, 0.25,  # index
+                0.5, 0.0, 0.75, 0.25,  # middle
+                0.5, 0.75, 0.75, 0.25,  # ring
+                0.65, 0.9, 0.75, 0.6,  # thumb
+            ]
+        ))  # fmt: skip
+    total_joint_q_size: int = 24
+    total_joint_dq_size: int = 23
+    total_body_q_size: int = 23
+    total_body_qd_size: int = 23
+    total_body_f_size: int = 23
     w_pos: float = 100.0
     w_rot: float = 0.1
 
@@ -87,15 +86,10 @@ class AllegroCube(Task[AllegroCubeConfig]):
 
     def __init__(self, sim: Optional[Simulation] = None, num_rollout_worlds: int = 1) -> None:
         """Initializes the ALLEGRO cube rotation task."""
-        backend = self.config_t().sim_backend_type()
-        super().__init__(sim, num_rollout_worlds=num_rollout_worlds,
-                         xml_path=XML_PATH if backend == BackendType.MUJOCO else None,
-                         sim_xml_path=SIM_XML_PATH if backend == BackendType.MUJOCO else None,
-                         usd_path=USD_PATH if backend == BackendType.NEWTON else None)
+        super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
 
         self.goal_pos = np.array([0.0, 0.03, 0.1])
         self.goal_quat = np.array([1.0, 0.0, 0.0, 0.0])
-        self.qpos_home = QPOS_HOME
         self.reset_command = np.array(
             [
                 0.5, -0.75, 0.75, 0.25,  # index
@@ -242,7 +236,7 @@ class AllegroCube(Task[AllegroCubeConfig]):
         """Resets the model to a default state with random goal."""
         if self.mj_model:
             """Resets the model to a default state with random goal."""
-            self.mj_data.qpos[:] = self.qpos_home
+            self.mj_data.qpos[:] = self.config.qpos_home
             self.mj_data.qvel[:] = 0.0
             self.mj_data.ctrl[:] = self.reset_command
             self._update_goal_quat()
