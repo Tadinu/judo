@@ -203,7 +203,7 @@ def set_default_allegro_cube_overrides() -> None:
         CrossEntropyMethodConfig,
         {
             "num_nodes": 4,
-            "num_rollouts": 16 if AllegroCubeConfig().sim_backend_type() == BackendType.MUJOCO else 32,
+            "num_rollouts": 32 if AllegroCubeConfig().is_backend_mujoco() else 32,
             "num_elites": 5,
             "use_noise_ramp": True,
             "noise_ramp": 4.0,

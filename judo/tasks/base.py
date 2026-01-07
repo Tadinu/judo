@@ -6,10 +6,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Generic, TypeVar, Optional, TYPE_CHECKING, Union
 
-# MuJoCo
-import mujoco
 import numpy as np
-from mujoco import MjData, MjModel, MjSpec
+
+# MuJoCo
+import mujoco as mj
+import mujoco_warp as mjw
 
 # Newton
 import warp as wp
@@ -21,7 +22,6 @@ from judo.utils.warp import wp_create_kernel_tile_array
 
 if TYPE_CHECKING:
     from judo.simulation.base import Simulation
-    from judo.simulation import NTSimulation
 
 
 @dataclass
@@ -29,6 +29,10 @@ class TaskConfig:
     """Base task configuration dataclass."""
     sim_backend: str = BackendType.MUJOCO.name
     task_name: str = ""
+    xml_path: Optional[Union[Path, str]] = None
+    sim_xml_path: Optional[Union[Path, str]] = None
+    usd_path: Optional[Union[Path, str]] = None
+    qpos_home: Optional[np.ndarray] = None
     joint_names: Optional[list[str]] = None
     total_joint_q_size: int = 0
     total_joint_dq_size: int = 0
@@ -42,6 +46,10 @@ class TaskConfig:
     def sim_backend_type(self) -> BackendType:
         return BackendType[self.sim_backend]
 
+    def is_backend_mujoco(self) -> bool:
+        backend_type = self.sim_backend_type()
+        return backend_type == BackendType.MUJOCO or backend_type == BackendType.MUJOCO_WARP
+
 
 ConfigT = TypeVar("ConfigT", bound=TaskConfig)
 
@@ -52,25 +60,27 @@ class Task(ABC, Generic[ConfigT]):
     config_t: type[ConfigT]
 
     def __init__(self, sim: Optional[Simulation] = None,
-                 num_rollout_worlds: int = 1,
-                 xml_path: Optional[Union[Path, str]] = None,
-                 usd_path: Optional[Union[Path, str]] = None,
-                 sim_xml_path: Optional[Union[Path, str]] = None) -> None:
+                 num_rollout_worlds: int = 1) -> None:
         """Initialize the task."""
         self.sim = sim
         self.config = self.config_t()
+        backend_type = self.config.sim_backend_type()
 
         # MuJoCo
-        self.xml_path = xml_path
-        self.mj_spec = MjSpec.from_file(str(xml_path)) if xml_path else None
-        self.mj_model = self.mj_spec.compile() if xml_path else None
-        self.mj_data = MjData(self.mj_model) if xml_path else None
-        self.mj_sim_model = MjModel.from_xml_path(str(sim_xml_path)) if sim_xml_path else self.mj_model
+        is_mujoco_backend = (backend_type == BackendType.MUJOCO or backend_type == BackendType.MUJOCO_WARP)
+        self.mj_spec = mj.MjSpec.from_file(str(self.config.xml_path)) if is_mujoco_backend else None
+        self.mj_model = self.mj_spec.compile() if is_mujoco_backend else None
+        self.mj_data = mj.MjData(self.mj_model) if is_mujoco_backend else None
+        self.mj_sim_model = mj.MjModel.from_xml_path(str(self.config.sim_xml_path)) if self.config.sim_xml_path \
+            else self.mj_model
+
+        # MuJoCo Warp
+        self.mjw_model: mjw.Model = mjw.put_model(self.mj_model) if (backend_type == BackendType.MUJOCO_WARP) else None
+        self.mjw_data: mjw.Data = self.mjw_init_data(num_rollout_worlds) if self.mjw_model else None
 
         # Newton models (sim + rollout)
-        self.usd_path = usd_path
-        from judo.simulation import NTSimulation
-        self.nt_sim: NTSimulation = sim if isinstance(sim, NTSimulation) else None
+        self.usd_path = self.config.usd_path
+        self.nt_sim = sim if (backend_type == BackendType.NEWTON) else None
         self.nt_rollout_model: newton.Model = None
         self.nt_rollout_model_builder: newton.ModelBuilder = None
         self.nt_sim_model: newton.Model = None
@@ -81,12 +91,16 @@ class Task(ABC, Generic[ConfigT]):
         self.nt_num_bodies_per_world: int = 0
         self.nt_initial_world_positions = None
 
-        # Init state sim->rollout copy funcs
-        self.nt_init_sim_to_rollout_copy_functions()
-
         # Init sim & rollout models
         if self.nt_sim:
+            # Init state sim->rollout copy funcs
+            self.nt_init_sim_to_rollout_copy_functions()
             self.nt_init_models(num_rollout_worlds)
+
+    def mjw_init_data(self, num_rollout_worlds: int) -> mjw.Data:
+        self.mjw_data = mjw.put_data(self.mj_model, self.mj_data, nworld=num_rollout_worlds,
+                                     njmax=250)
+        return self.mjw_data
 
     def nt_init_models(self, num_rollout_worlds: int = 1, init_pose: wp.transform = wp.transform_identity()):
         if not self.nt_sim_model_builder:
@@ -218,7 +232,7 @@ class Task(ABC, Generic[ConfigT]):
 
     @property
     def nu(self) -> int:
-        """Number of control inputs. The same as the MjModel for this task."""
+        """Number of control inputs. The same as the mj.MjModel for this task."""
         return self.mj_model.nu if self.mj_model else self.nt_sim_model.joint_dof_count
 
     @property

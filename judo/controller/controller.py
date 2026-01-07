@@ -6,6 +6,7 @@ from typing import Any, Callable, Literal, Union, Optional
 import enum
 
 import newton
+import mujoco as mj
 import numpy as np
 import warp as wp
 from omegaconf import DictConfig
@@ -20,6 +21,7 @@ from judo.gui import slider
 from judo.optimizers import Optimizer, OptimizerConfig, get_registered_optimizers
 from judo.tasks import Task, TaskConfig, get_registered_tasks
 from judo.utils.mujoco import MJRolloutBackend, mj_make_model_data_pairs
+from judo.utils.mujoco_warp import MJWarpBackend
 from judo.utils.normalization import (
     IdentityNormalizer,
     Normalizer,
@@ -46,7 +48,7 @@ class SplineType(enum.Enum):
 class ControllerConfig(OverridableConfig):
     """Base controller config."""
 
-    horizon: float = 0.25  # 1.0
+    horizon: float = 1.0
     spline_order: str = SplineType.LINEAR.name
     control_freq: float = 20.0
     max_opt_iters: int = 1
@@ -91,18 +93,35 @@ class Controller:
             assert self.task.mj_model, f"MuJoCo model must be valid for the controller with rollout backend {rollout_backend}"
 
         # MuJoCo
-        self.mj_model = self.task.mj_model if rollout_backend == BackendType.MUJOCO else None
+        self.mj_model = self.task.mj_model if (rollout_backend == BackendType.MUJOCO or
+                                               rollout_backend == BackendType.MUJOCO_WARP) else None
         self.mj_model_data_pairs = mj_make_model_data_pairs(self.mj_model,
-                                                            self.optimizer_cfg.num_rollouts) if self.mj_model else None
+                                                            self.optimizer_cfg.num_rollouts) \
+            if rollout_backend == BackendType.MUJOCO else None
+        self.mj_state_type = mj.mjtState.mjSTATE_PHYSICS
+
+        # - MJ-C backend
         self.mj_rollout_backend = MJRolloutBackend(num_threads=self.optimizer_cfg.num_rollouts, backend=rollout_backend) \
-            if self.mj_model else None
-        self.mj_states = np.zeros(
-            (self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nq + self.mj_model.nv)) \
-            if self.mj_model else None
-        self.mj_current_state = np.concatenate(
-            [self.task.mj_data.qpos, self.task.mj_data.qvel]) if self.mj_model else None
-        self.mj_sensors = np.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nsensordata)) \
-            if self.mj_model else None
+            if rollout_backend == BackendType.MUJOCO else None
+
+        # - MJ-Warp backend
+        self.mjw_rollout_backend = MJWarpBackend(rollout_timesteps=self.num_timesteps,
+                                                 state_type=self.mj_state_type) \
+            if rollout_backend == BackendType.MUJOCO_WARP else None
+        if self.mjw_rollout_backend:
+            self.mjw_rollout_backend.set_model(self.mj_model, self.task.mjw_model, self.task.mjw_data)
+
+        # - MJ States
+        # Shape:
+        # + [MUJOCO]: (self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nq + self.mj_model.nv)
+        # + [MUJOCO_WARP]: (self.optimizer_cfg.num_rollouts, self.num_timesteps, mj.mj_stateSize(self.mj_model, state_type))
+        self.mj_states: np.ndarray = None
+        self.mj_current_state: np.ndarray = None
+
+        # - MJ Sensors
+        # + [MUJOCO]: (self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nsensordata)
+        # + [MUJOCO_WARP]: (self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mjw_rollout_backend.mjw_model.nsensordata)
+        self.mj_sensors: np.ndarray = None
 
         # Controls
         self.rollout_controls = np.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nu)) \
@@ -173,6 +192,7 @@ class Controller:
     @property
     def num_timesteps(self) -> int:
         """Helper function to recalculate the number of timesteps for simulation."""
+        # return 50
         return np.ceil(self.horizon / self.task.dt).astype(int)
 
     @property
@@ -238,9 +258,6 @@ class Controller:
 
     def update_action(self) -> None:
         """Abstract method for updating controller actions from current state/time."""
-        if self.mj_model:
-            assert self.mj_current_state.shape == (
-                self.mj_model.nq + self.mj_model.nv,), "Current state must be of shape (nq + nv,)"
         assert self.optimizer_cfg.num_rollouts > 0, "Need at least one rollout!"
 
         if self.optimizer_cfg.num_nodes < 4 and self.spline_order == SplineType.CUBIC:
@@ -253,7 +270,13 @@ class Controller:
         nominal_knots_normalized = self.action_normalizer.normalize(nominal_knots)
 
         # resizing any variables due to changes in the GUI
-        if self.mj_model:
+        if self.mjw_rollout_backend:
+            if self.task.mjw_data.nworld != self.optimizer_cfg.num_rollouts:
+                self.task.mjw_init_data(self.optimizer_cfg.num_rollouts)
+                self.mjw_rollout_backend.set_model(self.mj_model, self.task.mjw_model, self.task.mjw_data)
+        elif self.mj_model:
+            assert self.mj_current_state.shape == (self.mj_model.nq + self.mj_model.nv,), \
+                "[MuJoCo backend]: Current state must be of shape (nq + nv,)"
             if len(self.mj_model_data_pairs) != self.optimizer_cfg.num_rollouts:
                 self.mj_model_data_pairs = mj_make_model_data_pairs(self.mj_model, self.optimizer_cfg.num_rollouts)
                 self.mj_rollout_backend.update(self.optimizer_cfg.num_rollouts)
@@ -306,9 +329,14 @@ class Controller:
             # Roll out dynamics with action sequences.
             if self.mj_model:
                 self.task.pre_rollout(self.mj_current_state)
-                self.mj_states, self.mj_sensors = self.mj_rollout_backend.rollout(self.mj_model_data_pairs,
-                                                                                  self.mj_current_state,
-                                                                                  self.rollout_controls)
+                if self.mjw_rollout_backend:
+                    self.mj_states, self.mj_sensors = self.mjw_rollout_backend.rollout(self.mj_current_state,
+                                                                                       self.mj_state_type,
+                                                                                       self.rollout_controls)
+                else:
+                    self.mj_states, self.mj_sensors = self.mj_rollout_backend.rollout(self.mj_model_data_pairs,
+                                                                                      self.mj_current_state,
+                                                                                      self.rollout_controls)
                 self.task.post_rollout(
                     self.mj_states,
                     self.mj_sensors,
@@ -382,11 +410,12 @@ class Controller:
         (num_elite * num_trace_sensors * size of a single rollout x 2 (first and last point of spline) x 3 (3d pos))
         """
         # Resize traces if forced by config change.
-        if self.mj_model:
+        if self.mj_sensors is not None:
             self.sensor_rollout_size = self.num_timesteps - 1
             self.all_traces_rollout_size = self.sensor_rollout_size * self.num_trace_sensors
-            if self.num_trace_elites != min(self.max_num_traces, self.optimizer_cfg.num_rollouts):
-                self.num_trace_elites = min(self.max_num_traces, self.optimizer_cfg.num_rollouts)
+            new_num_rollouts = min(self.max_num_traces, self.optimizer_cfg.num_rollouts)
+            if self.num_trace_elites != new_num_rollouts:
+                self.num_trace_elites = new_num_rollouts
             sensors = np.repeat(self.mj_sensors, 2, axis=1)
 
             # Order the actions from best to worst so that the first `num_trace_sensors` x `num_nodes` traces
@@ -417,9 +446,14 @@ class Controller:
                 elites[sensor:: self.num_trace_sensors] = s1
             self.traces = np.reshape(elites, (total_traces_rollouts, 2, 3))
 
-    def update_state(self, state: Union[MujocoState, newton.State]) -> None:
+    def update_state(self, state: Union[MujocoState, np.ndarray, newton.State]) -> None:
         """Updates the states."""
-        if self.mj_model:
+        if self.mjw_rollout_backend:
+            assert isinstance(state, np.ndarray)
+            assert len(state) == mj.mj_stateSize(self.mj_model, self.mj_state_type)
+            self.mj_current_state = state
+        elif self.mj_model:
+            assert isinstance(state, MujocoState)
             self.mj_current_state = np.concatenate([state.qpos, state.qvel])
             self.time = state.time
             self.system_metadata = state.sim_metadata

@@ -33,19 +33,9 @@ class AllegroCubeConfig(TaskConfig):
 
     sim_backend: str = BackendType.MUJOCO.name
     task_name: str = "allegro_cube"
-    xml_path: Optional[Union[Path, str]] = LeapCubeConfig().xml_path
-    sim_xml_path: Optional[Union[Path, str]] = LeapCubeConfig().sim_xml_path
+    xml_path: Optional[Union[Path, str]] = LeapCubeConfig().xml_path  # CaltechLeapCubeConfig().xml_path
+    sim_xml_path: Optional[Union[Path, str]] = LeapCubeConfig().sim_xml_path  # CaltechLeapCubeConfig().sim_xml_path
     usd_path: Optional[Union[Path, str]] = str(MODEL_PATH / "usd" / "allegro_left_hand_with_cube.usda")
-    qpos_home: Optional[np.ndarray] = CaltechLeapCubeConfig().qpos_home if 'caltech' in xml_path else field(
-        default_factory=lambda: np.array(
-            [
-                0.0, 0.03, 0.1, 1.0, 0.0, 0.0, 0.0,  # cube
-                0.5, -0.75, 0.75, 0.25,  # index
-                0.5, 0.0, 0.75, 0.25,  # middle
-                0.5, 0.75, 0.75, 0.25,  # ring
-                0.65, 0.9, 0.75, 0.6,  # thumb
-            ]
-        ))  # fmt: skip
     total_joint_q_size: int = 24
     total_joint_dq_size: int = 23
     total_body_q_size: int = 23
@@ -77,6 +67,16 @@ class AllegroCubeConfig(TaskConfig):
             '/World/envs/env_0/Robot/thumb_link_2/thumb_joint_3',
             '/World/envs/env_0/Robot/thumb_link_3/thumb_biotac_tip_joint'
         ]
+
+        self.qpos_home = CaltechLeapCubeConfig().qpos_home if 'caltech' in self.xml_path else np.array(
+            [
+                0.0, 0.03, 0.1, 1.0, 0.0, 0.0, 0.0,  # cube
+                0.5, -0.75, 0.75, 0.25,  # index
+                0.5, 0.0, 0.75, 0.25,  # middle
+                0.5, 0.75, 0.75, 0.25,  # ring
+                0.65, 0.9, 0.75, 0.6,  # thumb
+            ]
+        )
 
 
 class AllegroCube(Task[AllegroCubeConfig]):

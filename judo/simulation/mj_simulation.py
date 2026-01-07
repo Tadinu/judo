@@ -1,9 +1,13 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
-from typing import Optional
+from typing import Optional, Union
 from mujoco import mj_step
 from omegaconf import DictConfig
 
+import numpy as np
+import mujoco as mj
+
+from judo import BackendType
 from judo.app.structs import MujocoState
 from judo.simulation.base import Simulation
 
@@ -20,10 +24,12 @@ class MJSimulation(Simulation):
     def __init__(
             self,
             init_task: str = "cylinder_push",
+            num_rollout_worlds: int = 1,
             task_registration_cfg: Optional[DictConfig] = None,
     ) -> None:
         """Initialize the simulation node."""
-        super().__init__(init_task=init_task, task_registration_cfg=task_registration_cfg)
+        super().__init__(init_task=init_task, num_rollout_worlds=num_rollout_worlds,
+                         task_registration_cfg=task_registration_cfg)
 
     def step(self) -> None:
         """Step the simulation forward by one timestep."""
@@ -38,18 +44,26 @@ class MJSimulation(Simulation):
                 pass
 
     @property
-    def sim_state(self) -> MujocoState:
+    def sim_state(self) -> Union[MujocoState, np.ndarray]:
         """Returns the current simulation state."""
-        return MujocoState(
-            time=self.task.mj_data.time,
-            qpos=self.task.mj_data.qpos,
-            qvel=self.task.mj_data.qvel,
-            xpos=self.task.mj_data.xpos,
-            xquat=self.task.mj_data.xquat,
-            mocap_pos=self.task.mj_data.mocap_pos,
-            mocap_quat=self.task.mj_data.mocap_quat,
-            sim_metadata=self.task.get_sim_metadata(),
-        )
+        backend_type = self.task.config.sim_backend_type()
+        if backend_type == BackendType.MUJOCO_WARP:
+            state_type = mj.mjtState.mjSTATE_PHYSICS
+            current_state = np.zeros(mj.mj_stateSize(self.task.mj_sim_model, state_type))
+            mj.mj_getState(self.task.mj_sim_model, self.task.mj_data, current_state, state_type)
+            return current_state
+        else:
+            assert backend_type == BackendType.MUJOCO
+            return MujocoState(
+                time=self.task.mj_data.time,
+                qpos=self.task.mj_data.qpos,
+                qvel=self.task.mj_data.qvel,
+                xpos=self.task.mj_data.xpos,
+                xquat=self.task.mj_data.xquat,
+                mocap_pos=self.task.mj_data.mocap_pos,
+                mocap_quat=self.task.mj_data.mocap_quat,
+                sim_metadata=self.task.get_sim_metadata(),
+            )
 
     @property
     def timestep(self) -> float:

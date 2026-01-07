@@ -2,7 +2,6 @@
 
 import time
 from copy import deepcopy
-from typing import Literal
 
 import numpy as np
 

@@ -28,17 +28,19 @@ class MPCApp:
         self.task_name = task_name
 
         # Sim
-        if sim_backend_type == BackendType.MUJOCO:
-            self.sim = MJSimulation(init_task=task_name,
-                                    task_registration_cfg=task_registration_cfg)
-        else:
-            config_cls = get_class_from_string(optimizer_registration_cfg[optimizer_name].config)
-            num_rollouts = get_override_config(config_cls, task_name)["num_rollouts"]
-            self.sim = NTSimulation(init_task=task_name,
-                                    num_substeps=8,  # MPC
-                                    num_rollout_worlds=num_rollouts,
-                                    kernel_set_joint_targets=kernel_set_joint_targets,
-                                    task_registration_cfg=task_registration_cfg)
+        config_cls = get_class_from_string(optimizer_registration_cfg[optimizer_name].config)
+        num_rollouts = get_override_config(config_cls, task_name)["num_rollouts"]
+        match sim_backend_type:
+            case BackendType.MUJOCO | BackendType.MUJOCO_WARP:
+                self.sim = MJSimulation(init_task=task_name,
+                                        num_rollout_worlds=num_rollouts,
+                                        task_registration_cfg=task_registration_cfg)
+            case BackendType.NEWTON:
+                self.sim = NTSimulation(init_task=task_name,
+                                        num_substeps=8,  # MPC
+                                        num_rollout_worlds=num_rollouts,
+                                        kernel_set_joint_targets=kernel_set_joint_targets,
+                                        task_registration_cfg=task_registration_cfg)
 
         # Controller
         # Whether the controller runs alongside the sim
