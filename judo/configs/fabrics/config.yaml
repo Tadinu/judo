@@ -1,0 +1,3 @@
+# Since hydra 1.1, Explicitly add custom schemas to the Defaults List.
+defaults:
+  - iiwa7_allegro_biotac_mujoco

@@ -12,7 +12,7 @@ import warp as wp
 
 # judo
 from judo import BackendType
-from judo.tasks.allegro_cube import AllegroCube, AllegroCubeConfig
+from judo.tasks.allegro_cube_rotate import AllegroCubeRotate, AllegroCubeRotateConfig
 from judo.simulation.mj_simulation import MJSimulation
 from judo.simulation.nt_simulation import NTSimulation
 
@@ -59,8 +59,8 @@ def wp_kernel_move_hand_wrist(
 class AllegroCubeMonkeySim(NTSimulation):
     def __init__(self, num_instances: int = 1,
                  task_registration_cfg: Optional[DictConfig] = None):
-        assert AllegroCubeConfig().sim_backend_type() == BackendType.NEWTON
-        super().__init__(init_task=AllegroCubeConfig().task_name,
+        assert AllegroCubeRotateConfig().sim_backend_type() == BackendType.NEWTON
+        super().__init__(init_task=AllegroCubeRotateConfig().task_name,
                          is_monkey_sim=True,
                          num_rollout_worlds=num_instances,
                          kernel_set_joint_targets=wp_kernel_move_hand_wrist,

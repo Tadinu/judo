@@ -1,0 +1,118 @@
+<mujoco model="leap_rh_fabric_cube_sim">
+  <include file="leap_rh_fabric_freejoint.xml"/>
+  <include file="cube/reorientation_cube.xml"/>
+
+  <statistic center="0.15 0 0" extent="0.4" meansize="0.01"/>
+  <size nuserdata="1"/>
+
+  <default>
+    <default class="translation">
+      <position kp="100" dampratio="1" ctrlrange="-.5 .5"/>
+      <general ctrlrange="-.5 .5"/>
+    </default>
+    <default class="rotation">
+      <!--
+      Note that the rotational control range is purposefully limited to (-pi/2, pi/2) to avoid the
+      documented instabillity near pi, which is due to taking quaternion differences.
+      Increase this range to pi or bigger in order to see the instabillity.
+      See here for more details https://mujoco.readthedocs.io/en/latest/XMLreference.html#actuator
+      -->
+      <position kp="5" dampratio="1" ctrlrange="-1.571 1.571"/>
+      <general ctrlrange="-1.571 1.571"/>
+    </default>
+  </default>
+
+  <visual>
+    <headlight diffuse=".8 .8 .8" ambient=".2 .2 .2" specular="1 1 1"/>
+    <rgba force="1 0 0 1"/>
+    <global azimuth="120" elevation="-20"/>
+    <map force="0.01" stiffness="500"/>
+    <scale forcewidth="0.1" contactwidth="0.5" contactheight="0.2"/>
+    <quality shadowsize="8192"/>
+  </visual>
+
+  <asset>
+    <texture type="skybox" builtin="gradient" rgb1="1 1 1" rgb2="1 1 1" width="800" height="800"/>
+    <texture type="2d" name="groundplane" builtin="checker" mark="edge" rgb1="1 1 1" rgb2="1 1 1" markrgb="0 0 0"
+             width="300" height="300"/>
+    <material name="groundplane" texture="groundplane" texuniform="true" texrepeat="5 5" reflectance="0"/>
+  </asset>
+
+  <default>
+    <default class="cube">
+      <geom friction="0.3 0.05 0.01" conaffinity="2"/>
+    </default>
+  </default>
+
+  <worldbody>
+    <camera name="side" pos="-0.183 0.396 0.296" xyaxes="-0.783 -0.622 -0.000 0.332 -0.419 0.845"/>
+    <geom name="floor" pos="0 0 0" size="0 0 0.01" type="plane" material="groundplane" contype="1" conaffinity="1"/>
+    <body name="target" mocap="true" pos="0.325 0.17 0.4">
+      <geom type="box" size=".035 .035 .07" mass=".108" material="cube" contype="0" conaffinity="0" group="2"/>
+    </body>
+  </worldbody>
+
+  <actuator>
+    <general name="LRTx" site="leap_base" refsite="reference" gear="1 0 0 0 0 0" class="translation"/>
+    <general name="LRTy" site="leap_base" refsite="reference" gear="0 1 0 0 0 0" class="translation"/>
+    <general name="LRTz" site="leap_base" refsite="reference" gear="0 0 1 0 0 0" class="translation"/>
+    <general name="LRRx" site="leap_base" refsite="reference" gear="0 0 0 1 0 0" class="rotation"/>
+    <general name="LRRy" site="leap_base" refsite="reference" gear="0 0 0 0 1 0" class="rotation"/>
+    <general name="LRRz" site="leap_base" refsite="reference" gear="0 0 0 0 0 1" class="rotation"/>
+    <!--
+    <general name="LRTx" joint="LRTx" ctrlrange="-0.25 0.25" biastype="affine" gainprm="500 0 0" biasprm="0 -200 0"/>
+    <general name="LRTy" joint="LRTy" ctrlrange="-0.25 0.25" biastype="affine" gainprm="500 0 0" biasprm="0 -200 0"/>
+    <general name="LRTz" joint="LRTz" ctrlrange="-0.5 0.5" biastype="affine" gainprm="500 0 0" biasprm="0 -200 0"/>
+    -->
+  </actuator>
+
+  <sensor>
+    <!-- cube. -->
+    <framepos name="cube_position" objtype="body" objname="cube"/>
+    <contact name="cube_contact_with_palm" geom1="cube" geom2="palm_visual" data="found force"/>
+    <contact name="cube_contact_with_th_tip" geom1="cube" geom2="th_tip" data="found force"/>
+    <contact name="cube_contact_with_if_tip" geom1="cube" geom2="if_tip" data="found force"/>
+    <contact name="cube_contact_with_mf_tip" geom1="cube" geom2="mf_tip" data="found force"/>
+    <contact name="cube_contact_with_rf_tip" geom1="cube" geom2="rf_tip" data="found force"/>
+    <framepos name="cube_distance_to_grasp" objtype="body" objname="cube" reftype="site" refname="grasp_site"/>
+    <framepos name="cube_distance_to_target" objtype="body" objname="cube" reftype="body" refname="target"/>
+    <framequat name="cube_orientation" objtype="body" objname="cube"/>
+    <framequat name="cube_orientation_from_target" objtype="body" objname="cube" reftype="body" refname="target"/>
+    <framepos name="grasp_distance_from_target" objtype="site" objname="grasp_site" reftype="body" refname="target"/>
+    <framelinvel name="cube_linear_vel" objtype="body" objname="cube"/>
+    <frameangvel name="cube_angular_vel" objtype="body" objname="cube"/>
+    <frameangacc name="cube_angular_acc" objtype="body" objname="cube"/>
+    <framezaxis name="cube_upvector" objtype="body" objname="cube"/>
+
+    <!-- hand. -->
+    <framepos name="palm_position" objtype="site" objname="grasp_site"/>
+    <framepos name="th_tip_distance_to_cube" objtype="site" objname="th_tip" reftype="body" refname="cube"/>
+    <framepos name="if_tip_distance_to_cube" objtype="site" objname="if_tip" reftype="body" refname="cube"/>
+    <framepos name="mf_tip_distance_to_cube" objtype="site" objname="mf_tip" reftype="body" refname="cube"/>
+    <framepos name="rf_tip_distance_to_cube" objtype="site" objname="rf_tip" reftype="body" refname="cube"/>
+
+    <!-- goal. -->
+    <framequat name="cube_goal_orientation" objtype="body" objname="target"/>
+    <framezaxis name="cube_goal_upvector" objtype="body" objname="target"/>
+  </sensor>
+
+  <!--
+  <keyframe>
+    <key name="home"
+      qpos="
+      0 0 0
+      0.8 0 0.8 0.8
+      0.8 0 0.8 0.8
+      0.8 0 0.8 0.8
+      0.8 0.8 0.8 0
+      0.1 0.0 0.0 0.810967 -0.00262895 -0.585086 -0.000254303"
+      ctrl="
+      0 0 0
+      0.8 0 0.8 0.8
+      0.8 0 0.8 0.8
+      0.8 0 0.8 0.8
+      0.8 0.8 0.8 0" mpos="0.25 0.16 0"
+      mquat="1 0 0 0"/>
+  </keyframe>
+  -->
+</mujoco>

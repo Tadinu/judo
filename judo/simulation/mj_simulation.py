@@ -54,14 +54,15 @@ class MJSimulation(Simulation):
             return current_state
         else:
             assert backend_type == BackendType.MUJOCO
+            data = self.task.mj_data
             return MujocoState(
-                time=self.task.mj_data.time,
-                qpos=self.task.mj_data.qpos,
-                qvel=self.task.mj_data.qvel,
-                xpos=self.task.mj_data.xpos,
-                xquat=self.task.mj_data.xquat,
-                mocap_pos=self.task.mj_data.mocap_pos,
-                mocap_quat=self.task.mj_data.mocap_quat,
+                time=data.time,
+                qpos=data.qpos,
+                qvel=data.qvel,
+                xpos=data.xpos,
+                xquat=data.xquat,
+                mocap_pos=data.mocap_pos,
+                mocap_quat=data.mocap_quat,
                 sim_metadata=self.task.get_sim_metadata(),
             )
 

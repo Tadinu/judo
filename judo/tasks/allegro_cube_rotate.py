@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 @slider("w_pos", 0.0, 200.0)
 @slider("w_rot", 0.0, 1.0)
 @dataclass
-class AllegroCubeConfig(TaskConfig):
+class AllegroCubeRotateConfig(TaskConfig):
     """Reward configuration ALLEGRO cube rotation task."""
 
     sim_backend: str = BackendType.MUJOCO.name
@@ -36,6 +36,8 @@ class AllegroCubeConfig(TaskConfig):
     xml_path: Optional[Union[Path, str]] = LeapCubeConfig().xml_path  # CaltechLeapCubeConfig().xml_path
     sim_xml_path: Optional[Union[Path, str]] = LeapCubeConfig().sim_xml_path  # CaltechLeapCubeConfig().sim_xml_path
     usd_path: Optional[Union[Path, str]] = str(MODEL_PATH / "usd" / "allegro_left_hand_with_cube.usda")
+    goal_pos: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.03, 0.1]))
+    goal_quat: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
     total_joint_q_size: int = 24
     total_joint_dq_size: int = 23
     total_body_q_size: int = 23
@@ -75,31 +77,22 @@ class AllegroCubeConfig(TaskConfig):
                 0.5, 0.0, 0.75, 0.25,  # middle
                 0.5, 0.75, 0.75, 0.25,  # ring
                 0.65, 0.9, 0.75, 0.6,  # thumb
-            ]
-        )
+            ])
+
+        self.reset_command = self.qpos_home[7:]
 
 
-class AllegroCube(Task[AllegroCubeConfig]):
+class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
     """Defines the ALLEGRO cube rotation task."""
 
-    config_t: type[AllegroCubeConfig] = AllegroCubeConfig
+    config_t: type[AllegroCubeRotateConfig] = AllegroCubeRotateConfig
 
     def __init__(self, sim: Optional[Simulation] = None, num_rollout_worlds: int = 1) -> None:
         """Initializes the ALLEGRO cube rotation task."""
         super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
 
-        self.goal_pos = np.array([0.0, 0.03, 0.1])
-        self.goal_quat = np.array([1.0, 0.0, 0.0, 0.0])
-        self.reset_command = np.array(
-            [
-                0.5, -0.75, 0.75, 0.25,  # index
-                0.5, 0.0, 0.75, 0.25,  # middle
-                0.5, 0.75, 0.75, 0.25,  # ring
-                0.65, 0.9, 0.75, 0.6,  # thumb
-            ]
-        )  # fmt: skip
-        self.reset()
-
+        goal_mocap_body_id = mj.mj_name2id(self.mj_sim_model, mj.mjtObj.mjOBJ_BODY, "target")
+        self.goal_mocap_id = self.mj_sim_model.body_mocapid[goal_mocap_body_id] if goal_mocap_body_id > -1 else -1
         if self.nt_sim_model_builder:
             cube_names = ['cube', '/World/envs/env_0/object/DexCube']
             self.nt_cube_body_idx_offset = [self.nt_sim_model_builder.body_key.index(cube_name)
@@ -151,7 +144,7 @@ class AllegroCube(Task[AllegroCubeConfig]):
         # "standard" tracking task
         qo_pos_traj = states[..., :3]
         qo_quat_traj = states[..., 3:7]
-        qo_pos_diff = qo_pos_traj - self.goal_pos
+        qo_pos_diff = qo_pos_traj - self.config.goal_pos
         qo_quat_diff = quat_diff_so3(qo_quat_traj, goal_quat)
 
         pos_cost = w_pos * 0.5 * np.square(qo_pos_diff).sum(-1).mean(-1)
@@ -229,7 +222,7 @@ class AllegroCube(Task[AllegroCubeConfig]):
             ]
         )
         if self.mj_data:
-            self.mj_data.mocap_quat[0] = goal_quat
+            self.mj_data.mocap_quat[self.goal_mocap_id] = goal_quat
         self.goal_quat = goal_quat
 
     def reset(self) -> None:
@@ -238,7 +231,7 @@ class AllegroCube(Task[AllegroCubeConfig]):
             """Resets the model to a default state with random goal."""
             self.mj_data.qpos[:] = self.config.qpos_home
             self.mj_data.qvel[:] = 0.0
-            self.mj_data.ctrl[:] = self.reset_command
+            self.mj_data.ctrl[:] = self.config.reset_command
             self._update_goal_quat()
             mj.mj_forward(self.mj_model, self.mj_data)
         else:

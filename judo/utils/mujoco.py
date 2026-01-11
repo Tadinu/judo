@@ -1,11 +1,13 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 import time
+from typing import Sequence, Union
 from copy import deepcopy
 
 import numpy as np
 
 # mujoco
+import mujoco as mj
 from mujoco import MjData, MjModel
 from mujoco.rollout import Rollout
 
@@ -19,6 +21,38 @@ def mj_make_model_data_pairs(model: MjModel, num_pairs: int) -> list[tuple[MjMod
     datas = [MjData(m) for m in models]
     model_data_pairs = list(zip(models, datas, strict=True))
     return model_data_pairs
+
+
+def mj_qpos_width(jnt_type: Union[int, mj.mjtJoint]) -> int:
+    """Get the dimensionality of the joint in qpos."""
+    if isinstance(jnt_type, mj.mjtJoint):
+        jnt_type = jnt_type.value
+    match jnt_type:
+        case mj.mjtJoint.mjJNT_FREE:
+            return 7  # pos + quat
+        case mj.mjtJoint.mjJNT_BALL:
+            return 4  # quat
+        case mj.mjtJoint.mjJNT_SLIDE:
+            return 1  # scalar
+        case mj.mjtJoint.mjJNT_HINGE:
+            return 1  # scalar
+    return 0
+
+
+def mj_get_qpos_ids(model: mj.MjModel, joint_names: Sequence[str]) -> np.ndarray:
+    index_list: list[int] = []
+    for jnt_name in joint_names:
+        jnt = model.joint(jnt_name).id
+        jnt_type = model.jnt_type[jnt]
+        qadr = model.jnt_qposadr[jnt]
+        qdim = mj_qpos_width(jnt_type)
+        index_list.extend(range(qadr, qadr + qdim))
+    return np.array(index_list)
+
+
+def mj_sensor_idx(model: mj.MjModel, sensor_name: str) -> int:
+    # NOTE: model.sensor(sensor_name).adr[0] != model.sensor(sensor_name).id
+    return model.sensor(sensor_name).adr[0]
 
 
 class MJRolloutBackend:

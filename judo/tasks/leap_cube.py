@@ -1,7 +1,8 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
+from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Optional, Union
+from typing import Any, Optional, Union, TYPE_CHECKING
 from pathlib import Path
 
 import mujoco
@@ -11,6 +12,9 @@ from judo import MODEL_PATH
 from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
 from judo.utils.math_utils import quat_diff, quat_diff_so3
+
+if TYPE_CHECKING:
+    from judo.simulation.base import Simulation
 
 
 @slider("w_pos", 0.0, 200.0)
@@ -31,6 +35,16 @@ class LeapCubeConfig(TaskConfig):
             0.65, 0.9, 0.75, 0.6,  # thumb
         ]
     ))  # fmt: skip
+    reset_command: Optional[np.ndarray] = field(default_factory=lambda: np.array(
+        [
+            0.5, -0.75, 0.75, 0.25,  # index
+            0.5, 0.0, 0.75, 0.25,  # middle
+            0.5, 0.75, 0.75, 0.25,  # ring
+            0.65, 0.9, 0.75, 0.6,  # thumb
+        ]
+    ))  # fmt: skip
+    goal_pos: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.03, 0.1]))
+    goal_quat: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
     w_pos: float = 100.0
     w_rot: float = 0.1
 
@@ -40,20 +54,10 @@ class LeapCube(Task[LeapCubeConfig]):
 
     config_t: type[LeapCubeConfig] = LeapCubeConfig
 
-    def __init__(self) -> None:
+    def __init__(self, sim: Optional[Simulation] = None, num_rollout_worlds: int = 1) -> None:
         """Initializes the LEAP cube rotation task."""
-        super().__init__()
-        self.goal_pos = np.array([0.0, 0.03, 0.1])
-        self.goal_quat = np.array([1.0, 0.0, 0.0, 0.0])
-        self.qpos_home = self.config.qpos_home
-        self.reset_command = np.array(
-            [
-                0.5, -0.75, 0.75, 0.25,  # index
-                0.5, 0.0, 0.75, 0.25,  # middle
-                0.5, 0.75, 0.75, 0.25,  # ring
-                0.65, 0.9, 0.75, 0.6,  # thumb
-            ]
-        )  # fmt: skip
+        super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
+        self.goal_quat = self.config.goal_quat
         self.reset()
 
     def reward(
@@ -75,7 +79,7 @@ class LeapCube(Task[LeapCubeConfig]):
         # "standard" tracking task
         qo_pos_traj = states[..., :3]
         qo_quat_traj = states[..., 3:7]
-        qo_pos_diff = qo_pos_traj - self.goal_pos
+        qo_pos_diff = qo_pos_traj - self.config.goal_pos
         qo_quat_diff = quat_diff_so3(qo_quat_traj, goal_quat)
 
         pos_cost = w_pos * 0.5 * np.square(qo_pos_diff).sum(-1).mean(-1)
@@ -120,9 +124,9 @@ class LeapCube(Task[LeapCubeConfig]):
 
     def reset(self) -> None:
         """Resets the model to a default state with random goal."""
-        self.mj_data.qpos[:] = self.qpos_home
+        self.mj_data.qpos[:] = self.config.qpos_home
         self.mj_data.qvel[:] = 0.0
-        self.mj_data.ctrl[:] = self.reset_command
+        self.mj_data.ctrl[:] = self.config.reset_command
         self._update_goal_quat()
         mujoco.mj_forward(self.mj_model, self.mj_data)
 

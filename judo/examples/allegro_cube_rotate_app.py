@@ -6,7 +6,7 @@ from omegaconf import DictConfig
 
 from pathlib import Path
 from dataclasses import dataclass
-from judo.tasks.allegro_cube import AllegroCubeConfig
+from judo.tasks.allegro_cube_rotate import AllegroCubeRotateConfig
 
 # judo
 from judo.app.mpc_app import MPCApp
@@ -16,7 +16,7 @@ import warp as wp
 
 
 @dataclass
-class AllegroCubeRotateConfig(AllegroCubeConfig):
+class AllegroCubeRotateConfig(AllegroCubeRotateConfig):
     """Reward configuration ALLEGRO cube rotation task."""
 
     w_pos: float = 100.0
@@ -52,11 +52,11 @@ def wp_kernel_set_allegro_joint_targets(
     world_time[world_id] += sim_dt
 
 
-class AllegroCubeRotate(MPCApp):
+class AllegroCubeRotateApp(MPCApp):
     def __init__(self,
                  task_registration_cfg: Optional[DictConfig] = None,
                  optimizer_registration_cfg: Optional[DictConfig] = None) -> None:
-        cfg = AllegroCubeConfig()
+        cfg = AllegroCubeRotateConfig()
         super().__init__(task_name=cfg.task_name,
                          optimizer_name=list(optimizer_registration_cfg.keys())[0],
                          sim_backend_type=cfg.sim_backend_type(),
@@ -70,7 +70,7 @@ task_reg_cfg = optimizer_reg_cfg = None
 CONFIG_PATH = (Path(__file__).parent.parent / "configs").resolve()
 
 
-@hydra.main(config_path=str(CONFIG_PATH), config_name="judo_dora_allegro_cube", version_base="1.3")
+@hydra.main(config_path=str(CONFIG_PATH), config_name="judo_dora_allegro_cube_rotate", version_base="1.3")
 def fetch_cfgs(cfg: DictConfig) -> None:
     """Main function to run judo via a hydra configuration yaml file."""
     global task_reg_cfg, optimizer_reg_cfg
@@ -88,6 +88,6 @@ with initialize_config_dir(config_dir=str(CONFIG_PATH), version_base="1.3"):
 
 if __name__ == "__main__":
     fetch_cfgs()
-    app = AllegroCubeRotate(task_registration_cfg=task_reg_cfg,
-                            optimizer_registration_cfg=optimizer_reg_cfg)
+    app = AllegroCubeRotateApp(task_registration_cfg=task_reg_cfg,
+                               optimizer_registration_cfg=optimizer_reg_cfg)
     app.spin()

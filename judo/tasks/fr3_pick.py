@@ -83,6 +83,8 @@ class FR3PickConfig(TaskConfig):
     """Reward configuration for FR3 pick task."""
 
     task_name: str = "fr3_pick"
+    reset_command: np.ndarray = field(default_factory=lambda: np.array([0, 0, 0, -1.57079, 0, 1.57079, -0.7853, 0.0]))
+
     # reward weights
     lift_weights: LiftConfig = field(default_factory=LiftConfig)
     move_weights: MoveConfig = field(default_factory=MoveConfig)
@@ -111,7 +113,6 @@ class FR3Pick(Task[FR3PickConfig]):
     def __init__(self) -> None:
         """Initializes the LEAP cube rotation task."""
         super().__init__()
-        self.reset_command = np.array([0, 0, 0, -1.57079, 0, 1.57079, -0.7853, 0.0])
 
         # object indices
         self.obj_pos_adr = self.get_joint_position_start_index("object_joint")
@@ -316,5 +317,5 @@ class FR3Pick(Task[FR3PickConfig]):
         """Resets the model to a default state with random goal."""
         self.mj_data.qpos[:] = QPOS_HOME
         self.mj_data.qvel[:] = 0.0
-        self.mj_data.ctrl[:] = self.reset_command
+        self.mj_data.ctrl[:] = self.config.reset_command
         mujoco.mj_forward(self.mj_model, self.mj_data)

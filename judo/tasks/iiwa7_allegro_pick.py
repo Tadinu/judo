@@ -1,6 +1,6 @@
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Any, Optional, Literal, TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import Any, Optional, TYPE_CHECKING
 import re
 import numpy as np
 
@@ -33,7 +33,7 @@ class IIWA7AllegroPickConfig(TaskConfig):
 
     xml_path = str(MODEL_PATH / "xml" / "allegro_left_hand_with_cube.usda")
     sim_xml_path = str(MODEL_PATH / "xml" / "allegro_left_hand_with_cube.usda")
-    qpos_home = np.array(
+    qpos_home: np.ndarray = field(default_factory=lambda: np.array(
         [
             0.0, 0.03, 0.1, 1.0, 0.0, 0.0, 0.0,  # mug
             0.5, -0.75, 0.75, 0.25,  # index
@@ -41,7 +41,15 @@ class IIWA7AllegroPickConfig(TaskConfig):
             0.5, 0.75, 0.75, 0.25,  # ring
             0.65, 0.9, 0.75, 0.6,  # thumb
         ]
-    )  # fmt: skip
+    ))  # fmt: skip
+    reset_command: np.ndarray = field(default_factory=lambda: np.array(
+        [
+            0.5, -0.75, 0.75, 0.25,  # index
+            0.5, 0.0, 0.75, 0.25,  # middle
+            0.5, 0.75, 0.75, 0.25,  # ring
+            0.65, 0.9, 0.75, 0.6,  # thumb
+        ]
+    ))  # fmt: skip
     w_pos: float = 100.0
     w_rot: float = 0.1
 
@@ -61,14 +69,6 @@ class IIWA7AllegroPick(Task[IIWA7AllegroPickConfig]):
         self.goal_pos = np.array([0.0, 0.03, 0.1])
         self.goal_quat = np.array([1.0, 0.0, 0.0, 0.0])
         self.qpos_home = self.config.qpos_home
-        self.reset_command = np.array(
-            [
-                0.5, -0.75, 0.75, 0.25,  # index
-                0.5, 0.0, 0.75, 0.25,  # middle
-                0.5, 0.75, 0.75, 0.25,  # ring
-                0.65, 0.9, 0.75, 0.6,  # thumb
-            ]
-        )  # fmt: skip
         self.reset()
 
         if self.nt_sim_model_builder:
@@ -209,7 +209,7 @@ class IIWA7AllegroPick(Task[IIWA7AllegroPickConfig]):
             """Resets the model to a default state with random goal."""
             self.mj_data.qpos[:] = self.qpos_home
             self.mj_data.qvel[:] = 0.0
-            self.mj_data.ctrl[:] = self.reset_command
+            self.mj_data.ctrl[:] = self.config.reset_command
             self._update_goal_quat()
             mj.mj_forward(self.mj_model, self.mj_data)
         else:

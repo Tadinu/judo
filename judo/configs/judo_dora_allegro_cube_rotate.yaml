@@ -1,12 +1,12 @@
 defaults:
   - judo_dora_default
 
-task: allegro_cube
+task: allegro_cube_rotate
 optimizer: cem
 custom_tasks:
   allegro_cube_rotate:
-    task: judo.examples.allegro_cube_rotate.AllegroCubeRotate
-    config: judo.examples.allegro_cube_rotate.AllegroCubeRotateConfig
+    task: judo.tasks.allegro_cube_rotate.AllegroCubeRotate
+    config: judo.tasks.allegro_cube_rotate.AllegroCubeRotateConfig
 
 custom_optimizers:
   cem:

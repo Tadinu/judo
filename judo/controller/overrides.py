@@ -2,6 +2,7 @@
 
 from judo.config import set_config_overrides
 from judo.controller.controller import SplineType, ControllerConfig
+from judo.utils.normalization import NormalizerType
 
 
 def set_default_cylinder_push_overrides() -> None:
@@ -91,4 +92,18 @@ def set_default_allegro_cube_overrides() -> None:
             "spline_order": SplineType.CUBIC.name,
             "max_num_traces": 1,
         }
+    )
+
+
+def set_default_leap_freejoint_object_pick_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the leap cube down task."""
+    set_config_overrides(
+        "leap_freejoint_object_pick",
+        ControllerConfig,
+        {
+            "horizon": 1.0,
+            "spline_order": SplineType.CUBIC.name,
+            "max_num_traces": 1,
+            "action_normalizer": NormalizerType.MIN_MAX.name
+        },
     )
