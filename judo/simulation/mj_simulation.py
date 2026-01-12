@@ -31,17 +31,29 @@ class MJSimulation(Simulation):
         super().__init__(init_task=init_task, num_rollout_worlds=num_rollout_worlds,
                          task_registration_cfg=task_registration_cfg)
 
+        # Warm up to get stabilized sim initial state
+        self.step()
+
+    def _full_step(self):
+        self.task.pre_sim_step()
+        mj_step(self.task.mj_sim_model, self.task.mj_data)
+        self.task.post_sim_step()
+
     def step(self) -> None:
         """Step the simulation forward by one timestep."""
         if self.nominal_control_spline is not None and not self.paused:
             try:
-                self.task.mj_data.ctrl[:] = self.nominal_control_spline(self.task.mj_data.time)[:self.task.nu]
-                self.task.pre_sim_step()
-                mj_step(self.task.mj_sim_model, self.task.mj_data)
-                self.task.post_sim_step()
+                nominal_ctrl = self.nominal_control_spline(self.task.mj_data.time)
+                if self.fabrics_agent:
+                    nominal_ctrl = self.fabrics_agent.fabrics_plan(nominal_ctrl[None, None, ...],
+                                                                   self.sim_state.data.copy()).squeeze()
+                self.task.mj_data.ctrl[:] = nominal_ctrl[:self.task.mj_sim_model.nu]
+                self._full_step()
             except ValueError:
                 # we're switching tasks and the new task has a different number of actuators
                 pass
+        else:
+            self._full_step()
 
     @property
     def sim_state(self) -> Union[MujocoState, np.ndarray]:

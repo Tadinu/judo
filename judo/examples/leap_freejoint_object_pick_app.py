@@ -3,16 +3,40 @@ from typing import Optional
 import hydra
 from hydra import compose, initialize_config_dir
 from hydra.core.config_store import ConfigStore
-from omegaconf import DictConfig
+from omegaconf import DictConfig, OmegaConf
 
 from pathlib import Path
 
 # judo
+from judo import PACKAGE_ROOT
 from judo.tasks.leap_freejoint_object_pick import LeapFreeJointObjectPickConfig
 from judo.app.mpc_app import MPCApp
 
 # warp
 import warp as wp
+
+# mjmanip
+from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
+
+FABRICS_CONFIGS_DIR = f"{PACKAGE_ROOT}/configs/fabrics"
+
+cs = ConfigStore.instance()
+cs.store(name="leap_rh", node=ArmHandPoseFabricConfig)
+
+cfg_name = "leap_rh"
+
+fabric_cfg = None
+
+
+@hydra.main(version_base=None, config_path=FABRICS_CONFIGS_DIR, config_name=cfg_name)
+def gb_fetch_fabric_config(cfg: DictConfig) -> None:
+    global fabric_cfg
+    fabric_cfg = OmegaConf.to_object(cfg)
+    assert isinstance(fabric_cfg, ArmHandPoseFabricConfig)
+    # print(OmegaConf.to_yaml(fabric_cfg))
+
+
+gb_fetch_fabric_config()
 
 
 @wp.kernel
@@ -47,14 +71,16 @@ def wp_kernel_set_leap_joint_targets(
 class LeapFreeJointObjectPickApp(MPCApp):
     def __init__(self,
                  task_registration_cfg: Optional[DictConfig] = None,
-                 optimizer_registration_cfg: Optional[DictConfig] = None) -> None:
+                 optimizer_registration_cfg: Optional[DictConfig] = None,
+                 fabric_cfg: Optional[ArmHandPoseFabricConfig] = None) -> None:
         cfg = LeapFreeJointObjectPickConfig()
         super().__init__(task_name=cfg.task_name,
                          optimizer_name=list(optimizer_registration_cfg.keys())[0],
                          sim_backend_type=cfg.sim_backend_type(),
                          kernel_set_joint_targets=wp_kernel_set_leap_joint_targets,
                          task_registration_cfg=task_registration_cfg,
-                         optimizer_registration_cfg=optimizer_registration_cfg)
+                         optimizer_registration_cfg=optimizer_registration_cfg,
+                         fabric_cfg=fabric_cfg)
 
 
 task_reg_cfg = optimizer_reg_cfg = None
@@ -81,5 +107,6 @@ with initialize_config_dir(config_dir=str(CONFIG_PATH), version_base="1.3"):
 if __name__ == "__main__":
     fetch_cfgs()
     app = LeapFreeJointObjectPickApp(task_registration_cfg=task_reg_cfg,
-                                     optimizer_registration_cfg=optimizer_reg_cfg)
+                                     optimizer_registration_cfg=optimizer_reg_cfg,
+                                     fabric_cfg=fabric_cfg)
     app.spin()

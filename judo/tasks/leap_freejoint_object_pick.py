@@ -1,6 +1,6 @@
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Any, Optional, Tuple, Union, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 
 import numpy as np
 
@@ -11,13 +11,24 @@ import mujoco as mj
 from judo import MODEL_PATH
 from judo.gui import slider
 from judo.tasks.leap_cube import LeapCube, LeapCubeConfig
-from judo.utils.math_utils import quat_diff_so3
+from judo.utils.fabrics_utils import FabricsAgent
+from judo.utils.math_utils import np_quat_diff_so3
 from judo.utils.mujoco import mj_get_qpos_ids, mj_get_mocap_id
 
 if TYPE_CHECKING:
     from judo.simulation.base import Simulation
 
-OBJ_NAME = "cube"
+# mjmanip
+from mjmanip import DEFAULT_SCENE_XML_PATH
+from mjmanip.robot.leap_mjx import LeapMjx
+from mjmanip.robot.leap_fabrics import LeapWithFabrics, LeapWithFabricsEnv, HAND_XML_PATH
+from mjmanip.utils import mj_get_joints_qids
+from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
+from mjmanip.control.fabrics.fabrics_controller import FabricsController
+from mjmanip.robot.leap_fabrics import LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \
+    LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES
+
+OBJ_NAME = LeapWithFabrics.OBJECT_NAMES[0]
 
 
 @slider("w_pos", 0.0, 200.0)
@@ -76,7 +87,43 @@ class LeapFreeJointObjectPick(LeapCube):
             self.obj_quat_distance_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_orientation_from_target")
             # self.grasp_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index("grasp_distance_from_target")
             self.obj_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_target")
-        self.reach_threshold = 0.015
+        self.reach_threshold = 0.1 if self.fabrics_agent else 0.015 if OBJ_NAME == "cube" else 0.05
+
+    @LeapCube.nu.getter
+    def nu(self) -> int:
+        """Number of control inputs. The same as the mj.MjModel for this task."""
+        if self.mj_model and self.fabrics_agent:
+            if FabricsAgent.USE_PCA_HAND_GRASP:
+                return self.mj_model.nu - self.fabrics_agent.HAND_DOFS_NO + self.fabrics_agent.HAND_PCA_DIM
+            elif FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE:
+                return self.mj_model.nu - self.fabrics_agent.HAND_DOFS_NO + self.fabrics_agent.FINGER_EES_DOFS_NO
+        return super().nu
+
+    @LeapCube.actuator_ctrlrange.getter
+    def actuator_ctrlrange(self) -> np.ndarray:
+        """Mujoco actuator limits for this task."""
+        if self.mj_model and self.fabrics_agent:
+            limits = self.mj_model.actuator_ctrlrange
+            wrist_limits = limits[:-self.fabrics_agent.HAND_DOFS_NO]
+            if FabricsAgent.USE_PCA_HAND_GRASP:
+                hand_pca_mins = self.fabrics_agent.fabrics_controller.hand_pca_mins.clone().cpu().numpy()
+                hand_pca_maxs = self.fabrics_agent.fabrics_controller.hand_pca_maxs.clone().cpu().numpy()
+                hand_pca_ranges = np.vstack([hand_pca_mins, hand_pca_maxs]).transpose()
+                limits = np.vstack([wrist_limits, hand_pca_ranges])
+            elif FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES:
+                limits = np.vstack(
+                    [wrist_limits,
+                     np.tile(np.concatenate([np.array([[-0.01, 0.01]] * 3, dtype=limits.dtype),  # Linear dofs
+                                             np.array([[-1.57, 1.57]] * 3, dtype=limits.dtype)]),  # Angular dofs
+                             (int(FabricsAgent.FINGER_EES_DOFS_NO / 6), 1))])
+            elif FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE:
+                limits = np.vstack(
+                    [wrist_limits,
+                     np.array([[-0.01, 0.01]] * 3, dtype=limits.dtype),  # Linear dofs
+                     np.array([[-1.57, 1.57]] * 3, dtype=limits.dtype)])  # Angular dofs
+            return limits
+        else:
+            return super().actuator_ctrlrange
 
     def reward(self,
                states: np.ndarray,
@@ -104,7 +151,7 @@ class LeapFreeJointObjectPick(LeapCube):
             # obj_orientation_err = sensors[..., self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
             # goal_err_quat = np.array([1.0, 0.0, 0.0, 0.0])
             pass
-        orientation_cost = 0.05 * np.square(quat_diff_so3(obj_orientation, self.goal_quat)).sum(-1).mean(-1)
+        orientation_cost = 0.05 * np.square(np_quat_diff_so3(obj_orientation, self.goal_quat)).sum(-1).mean(-1)
 
         # Stage 3: Obj Grasping cost
         grasp_cost = 0.001 * np.sum(np.square(controls))
@@ -115,7 +162,7 @@ class LeapFreeJointObjectPick(LeapCube):
         else:
             obj_to_goal_distance = sensors[..., self.obj_pos_distance_to_goal_sensor_idx:
                                                 self.obj_pos_distance_to_goal_sensor_idx + 3]
-        bring_cost = np.square(obj_to_goal_distance).sum(-1).mean(-1)
+        bring_cost = 5 * np.square(obj_to_goal_distance).sum(-1).mean(-1)
 
         total_reward = - (reaching_cost + orientation_cost + grasp_cost + bring_cost)
         # print(total_reward.mean())

@@ -1,5 +1,5 @@
 import time
-from typing import Callable, Optional, Literal
+from typing import Callable, Optional
 from threading import Lock
 from omegaconf import DictConfig
 
@@ -13,8 +13,13 @@ from judo.config import get_override_config
 from judo.simulation.mj_simulation import MJSimulation
 from judo.simulation.nt_simulation import NTSimulation
 from judo.controller import Controller, make_controller
+from judo.utils.fabrics_utils import FabricsAgent, FABRICS_MPC_TYPE
 from judo.app.structs import SplineData
 from judo.app.utils import get_class_from_string
+
+# mjmanip
+from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
+from mjmanip.utils import mj_draw_spheres, mj_clear_scene
 
 
 class MPCApp:
@@ -23,11 +28,12 @@ class MPCApp:
                  sim_backend_type: BackendType,
                  kernel_set_joint_targets: Optional[Callable] = None,
                  task_registration_cfg: Optional[DictConfig] = None,
-                 optimizer_registration_cfg: Optional[DictConfig] = None) -> None:
+                 optimizer_registration_cfg: Optional[DictConfig] = None,
+                 fabric_cfg: Optional[ArmHandPoseFabricConfig] = None) -> None:
         """Initialize the simulation node."""
         self.task_name = task_name
 
-        # Sim
+        # 1- Sim
         config_cls = get_class_from_string(optimizer_registration_cfg[optimizer_name].config)
         num_rollouts = get_override_config(config_cls, task_name)["num_rollouts"]
         match sim_backend_type:
@@ -42,11 +48,22 @@ class MPCApp:
                                         kernel_set_joint_targets=kernel_set_joint_targets,
                                         task_registration_cfg=task_registration_cfg)
 
-        # Controller
+        # 2- Fabrics computation agent
+        if fabric_cfg and FABRICS_MPC_TYPE:
+            self.sim.fabrics_agent = FabricsAgent(self.sim.task.mj_sim_model, self.sim.task.mj_data,
+                                                  fabric_cfg, num_rollout_worlds=1)
+            self.sim.task.fabrics_agent = FabricsAgent(self.sim.task.mj_model, self.sim.task.mj_data,
+                                                       fabric_cfg, num_rollout_worlds=num_rollouts)
+            self.sim.task.map_controls = self.sim.task.fabrics_agent.fabrics_plan
+            print("FABRICS SUBSTEPS", FabricsAgent.NUM_FABRICS_STEPS)
+
+        # 3- Controller
+        # NOTE: Controller uses task's nu to initiate its mpc-algo/optimizer so must be after fabrics_agent,
+        # which decides task's nu
         # Whether the controller runs alongside the sim
         self.synchronous_controller = True
         if self.synchronous_controller:
-            self.controller = make_controller(
+            self.sim.controller = self.controller = make_controller(
                 sim=self.sim,
                 init_task=self.sim.task,
                 init_optimizer=optimizer_name,
@@ -54,6 +71,7 @@ class MPCApp:
                 optimizer_registration_cfg=optimizer_registration_cfg,
                 rollout_backend=sim_backend_type
             )
+            print("CONTROLLER NUM_TIMESTEPS", self.controller.num_timesteps)
             self.fetch_nominal_control_spline()
             self.write_state_to_controller()
             # Only for task update if from another thread
@@ -85,9 +103,17 @@ class MPCApp:
                 if self.synchronous_controller:
                     self.write_state_to_controller()
                     self.plan()
+                    self.mj_visualize_traces(viewer.user_scn)
                 self.sim.step()
                 viewer.sync()
             viewer.close()
+
+    def mj_visualize_traces(self, scene):
+        mj_clear_scene(scene)
+        # Nominal fabrics agent (the sim one, not rollout)'s sampled EE targets
+        fabrics_traces = self.sim.fabrics_agent.sampled_target_traces if self.sim.fabrics_agent else None
+        if fabrics_traces:
+            mj_draw_spheres(scene, fabrics_traces, [0.01] * len(fabrics_traces))
 
     def nt_spin(self):
         viewer = self.sim.sim_backend.viewer

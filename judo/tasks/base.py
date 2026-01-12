@@ -4,7 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Generic, TypeVar, Optional, TYPE_CHECKING, Union
+from typing import Any, Generic, TypeVar, Optional, Callable, Union, TYPE_CHECKING
 
 import numpy as np
 
@@ -18,10 +18,14 @@ import newton
 
 # judo
 from judo import BackendType
+from judo.utils.fabrics_utils import FabricsAgent
 from judo.utils.warp import wp_create_kernel_tile_array
 
 if TYPE_CHECKING:
     from judo.simulation.base import Simulation
+
+# mjmanip
+from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 
 
 @dataclass
@@ -39,6 +43,7 @@ class TaskConfig:
     total_body_q_size: int = 0
     total_body_qd_size: int = 0
     total_body_f_size: int = 0
+    fabric_env_world_file_name: Optional[str] = None
 
     def __post_init__(self):
         self.joint_names = []
@@ -69,6 +74,7 @@ class Task(ABC, Generic[ConfigT]):
         self.sim = sim
         self.config = self.config_t()
         backend_type = self.config.sim_backend_type()
+        self.num_rollout_worlds = num_rollout_worlds
 
         # MuJoCo
         is_mujoco_backend = (backend_type == BackendType.MUJOCO or backend_type == BackendType.MUJOCO_WARP)
@@ -111,12 +117,19 @@ class Task(ABC, Generic[ConfigT]):
         self.goal_pos = self.config.goal_pos
         self.goal_quat = self.config.goal_quat
 
+        # Custom controls map function
+        self.map_controls: Optional[Callable] = None
+
+        # Fabrics: Collision-aware Batched IK computation backend
+        self.fabrics_agent: Optional[FabricsAgent] = None
+
     def mjw_init_data(self, num_rollout_worlds: int) -> mjw.Data:
         self.mjw_data = mjw.put_data(self.mj_model, self.mj_data, nworld=num_rollout_worlds,
                                      njmax=250)
         return self.mjw_data
 
     def nt_init_models(self, num_rollout_worlds: int = 1, init_pose: wp.transform = wp.transform_identity()):
+        self.num_rollout_worlds = num_rollout_worlds
         if not self.nt_sim_model_builder:
             self.nt_sim_model_builder = self.nt_create_sim_model_builder(init_pose)
             self.nt_sim_model_builder.add_ground_plane()
@@ -166,25 +179,24 @@ class Task(ABC, Generic[ConfigT]):
         self.nt_kernel_tile_body_qd = wp_create_kernel_tile_array(self.config.total_body_qd_size)
         self.nt_kernel_tile_body_f = wp_create_kernel_tile_array(self.config.total_body_f_size)
 
-    def nt_copy_sim_to_rollout_state(self, sim_state: newton.State, rollout_state: newton.State,
-                                     num_rollout_worlds: int):
-        wp.launch_tiled(self.nt_kernel_tile_joint_q, dim=(num_rollout_worlds,),
+    def nt_copy_sim_to_rollout_state(self, sim_state: newton.State, rollout_state: newton.State):
+        wp.launch_tiled(self.nt_kernel_tile_joint_q, dim=(self.num_rollout_worlds,),
                         inputs=[sim_state.joint_q],
                         outputs=[rollout_state.joint_q],
                         block_dim=len(sim_state.joint_q))
-        wp.launch_tiled(self.nt_kernel_tile_joint_qd, dim=(num_rollout_worlds,),
+        wp.launch_tiled(self.nt_kernel_tile_joint_qd, dim=(self.num_rollout_worlds,),
                         inputs=[sim_state.joint_qd],
                         outputs=[rollout_state.joint_qd],
                         block_dim=len(sim_state.joint_qd))
-        wp.launch_tiled(self.nt_kernel_tile_body_q, dim=(num_rollout_worlds,),
+        wp.launch_tiled(self.nt_kernel_tile_body_q, dim=(self.num_rollout_worlds,),
                         inputs=[sim_state.body_q],
                         outputs=[rollout_state.body_q],
                         block_dim=len(sim_state.body_q))
-        wp.launch_tiled(self.nt_kernel_tile_body_qd, dim=(num_rollout_worlds,),
+        wp.launch_tiled(self.nt_kernel_tile_body_qd, dim=(self.num_rollout_worlds,),
                         inputs=[sim_state.body_qd],
                         outputs=[rollout_state.body_qd],
                         block_dim=len(sim_state.body_qd))
-        wp.launch_tiled(self.nt_kernel_tile_body_f, dim=(num_rollout_worlds,),
+        wp.launch_tiled(self.nt_kernel_tile_body_f, dim=(self.num_rollout_worlds,),
                         inputs=[sim_state.body_f],
                         outputs=[rollout_state.body_f],
                         block_dim=len(sim_state.body_f))
@@ -351,3 +363,6 @@ class Task(ABC, Generic[ConfigT]):
             joint_name: The name of the joint to get the starting index in the state array of.
         """
         return self.mj_model.nq + self.mj_model.jnt_dofadr[self.mj_model.joint(joint_name).id]
+
+    def init_fabrics(self, fabric_cfg: ArmHandPoseFabricConfig) -> None:
+        pass

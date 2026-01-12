@@ -11,7 +11,7 @@ import numpy as np
 from judo import MODEL_PATH
 from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
-from judo.utils.math_utils import quat_diff, quat_diff_so3
+from judo.utils.math_utils import np_quat_diff, np_quat_diff_so3
 
 if TYPE_CHECKING:
     from judo.simulation.base import Simulation
@@ -79,7 +79,7 @@ class LeapCube(Task[LeapCubeConfig]):
         qo_pos_traj = states[..., :3]
         qo_quat_traj = states[..., 3:7]
         qo_pos_diff = qo_pos_traj - self.config.goal_pos
-        qo_quat_diff = quat_diff_so3(qo_quat_traj, goal_quat)
+        qo_quat_diff = np_quat_diff_so3(qo_quat_traj, goal_quat)
 
         pos_cost = w_pos * 0.5 * np.square(qo_pos_diff).sum(-1).mean(-1)
         rot_cost = w_rot * 0.5 * np.square(qo_quat_diff).sum(-1).mean(-1)
@@ -96,7 +96,7 @@ class LeapCube(Task[LeapCubeConfig]):
 
         # check whether goal quat needs to be updated
         goal_quat = self.goal_quat
-        q_diff = quat_diff(self.mj_data.qpos[3:7], goal_quat)
+        q_diff = np_quat_diff(self.mj_data.qpos[3:7], goal_quat)
         sin_a_2 = np.linalg.norm(q_diff[1:])
         angle = 2 * np.arctan2(sin_a_2, q_diff[0])
         if angle > np.pi:

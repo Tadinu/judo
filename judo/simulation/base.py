@@ -1,13 +1,19 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
+from __future__ import annotations
 from abc import ABC, abstractmethod
-from typing import Callable, Optional
+from typing import Callable, Optional, TYPE_CHECKING
 
 from omegaconf import DictConfig
 
-from judo.app.utils import register_tasks_from_cfg
+# judo
 from judo.tasks import get_registered_tasks
 from judo.tasks.base import Task
+from judo.utils.fabrics_utils import FabricsAgent
+from judo.app.utils import register_tasks_from_cfg
+
+if TYPE_CHECKING:
+    from judo.controller import Controller
 
 
 class Simulation(ABC):
@@ -30,9 +36,12 @@ class Simulation(ABC):
         if task_registration_cfg is not None:
             register_tasks_from_cfg(task_registration_cfg)
 
-        self.nominal_control_spline: Callable | None = None
+        self.nominal_control_spline: Optional[Callable] = None
         self.paused = False
+        self.controller: Optional[Controller] = None
         self.task: Task = self._create_task(init_task, num_rollout_worlds)
+        # Fabrics: Collision-aware Batched IK computation backend
+        self.fabrics_agent: Optional[FabricsAgent] = None
 
     def _create_task(self, task_name: str, num_rollout_worlds: int = 1) -> Task:
         """Helper to initialize task from task name."""

@@ -18,7 +18,7 @@ from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
 from judo.tasks.leap_cube import LeapCubeConfig
 from judo.tasks.caltech_leap_cube import CaltechLeapCubeConfig
-from judo.utils.math_utils import quat_diff, quat_diff_so3
+from judo.utils.math_utils import np_quat_diff, np_quat_diff_so3
 from judo.utils.warp import wp_pose_to_mj
 
 if TYPE_CHECKING:
@@ -145,7 +145,7 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
         qo_pos_traj = states[..., :3]
         qo_quat_traj = states[..., 3:7]
         qo_pos_diff = qo_pos_traj - self.config.goal_pos
-        qo_quat_diff = quat_diff_so3(qo_quat_traj, goal_quat)
+        qo_quat_diff = np_quat_diff_so3(qo_quat_traj, goal_quat)
 
         pos_cost = w_pos * 0.5 * np.square(qo_pos_diff).sum(-1).mean(-1)
         rot_cost = w_rot * 0.5 * np.square(qo_quat_diff).sum(-1).mean(-1)
@@ -177,7 +177,7 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
                 qo_pos_traj = qo_pose_traj[:3]
                 qo_quat_traj = qo_pose_traj[3:]
                 qo_pos_diff = qo_pos_traj - self.goal_pos
-                qo_quat_diff = quat_diff_so3(qo_quat_traj, goal_quat)
+                qo_quat_diff = np_quat_diff_so3(qo_quat_traj, goal_quat)
 
                 pos_costs[w][i] = w_pos * 0.5 * np.square(qo_pos_diff)
                 rot_costs[w][i] = w_rot * 0.5 * np.square(qo_quat_diff)
@@ -199,7 +199,7 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
         # check whether goal quat needs to be updated
         goal_quat = self.goal_quat
         obj_quat = self.mj_data.qpos[3:7] if self.mj_data else nt_obj_pose[3:]
-        q_diff = quat_diff(obj_quat, goal_quat)
+        q_diff = np_quat_diff(obj_quat, goal_quat)
         sin_a_2 = np.linalg.norm(q_diff[1:])
         angle = 2 * np.arctan2(sin_a_2, q_diff[0])
         if angle > np.pi:

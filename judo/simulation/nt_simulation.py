@@ -51,6 +51,9 @@ class NTSimulation(Simulation):
         self.model_builder = self.sim_backend.model_builder
         self.nominal_action: np.ndarray = None
 
+        # Warm up to get stabilized sim initial state
+        self.step()
+
     def step(self):
         """Step the simulation"""
         if not self.paused:

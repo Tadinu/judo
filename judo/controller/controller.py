@@ -126,7 +126,6 @@ class Controller:
         # Controls
         self.rollout_controls = np.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nu)) \
             if self.mj_model else None
-        self.map_controls: Callable = None
 
         # Action (must be after rollout backend init)
         self.action_normalizer = self._init_action_normalizer()
@@ -326,8 +325,8 @@ class Controller:
 
             # Map algo's candidate controls to final ones that match model's configuration space.
             # Eg: Jacobian map to transform EE vel to joint vels, PCA map to transform PCA grasp values to finger joints
-            if self.map_controls:
-                self.rollout_controls = self.map_controls(self.rollout_controls)
+            if self.task.map_controls:
+                self.rollout_controls = self.task.map_controls(self.rollout_controls, self.mj_current_state)
 
             # Roll out dynamics with action sequences.
             if self.mj_model:
@@ -392,7 +391,6 @@ class Controller:
     def update_optimal_spline(self, times: np.ndarray, nominal_controls: np.ndarray) -> None:
         """Update the spline with new timesteps / controls."""
         self.nominal_spline = make_spline(times, nominal_controls, self.spline_order)
-        self.task.sim.nominal_control_spline = self.nominal_spline
 
     def reset(self) -> None:
         """Reset the controls, candidate controls and the spline to their default values."""
@@ -463,8 +461,7 @@ class Controller:
         else:
             # Write sim-backend's state -> rollout-backend's state
             assert isinstance(state, newton.State)
-            self.task.nt_copy_sim_to_rollout_state(sim_state=state, rollout_state=self.nt_rollout_backend.state_0,
-                                                   num_rollout_worlds=self.nt_rollout_backend.model_builder.num_worlds)
+            self.task.nt_copy_sim_to_rollout_state(sim_state=state, rollout_state=self.nt_rollout_backend.state_0)
 
     def _init_action_normalizer(self) -> Normalizer:
         """Initialize the action normalizer."""

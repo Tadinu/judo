@@ -60,7 +60,7 @@
     <mesh name="contact13" file="contact13.stl" class="mesh"/>
   </asset>
   <worldbody>
-    <body name="mug" pos="0 0 0.05" childclass="mug">
+    <body name="mug" pos="0 0 0.1" quat="0.71 0.71 0 0" childclass="mug">
       <freejoint name="mug_freejoint"/>
       <geom name="mug" mesh="mug" rgba="0 0 0.7 1.0" class="mug_visual" mass=".0108"/>
       <geom name="mug_trunk0" mesh="contact0" class="mug_trunk"/>
@@ -77,6 +77,8 @@
       <geom name="mug_handle1" mesh="contact11" class="mug_handle"/>
       <geom name="mug_handle2" mesh="contact12" class="mug_handle"/>
       <geom name="mug_handle3" mesh="contact13" class="mug_handle"/>
+      <site name="mug_handle_loop_center" pos="0.07 0 0.01" size="0.01 0.01 0.01" rgba="1 0.9 0.4 1"/>
+      <site name="mug_handle_center" pos="0.15 0 0.01" size="0.01 0.01 0.01" rgba="1 0.9 1 1"/>
     </body>
   </worldbody>
 </mujoco>

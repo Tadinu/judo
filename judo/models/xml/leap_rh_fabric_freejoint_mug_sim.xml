@@ -5,23 +5,6 @@
   <statistic center="0.15 0 0" extent="0.4" meansize="0.01"/>
   <size nuserdata="1"/>
 
-  <default>
-    <default class="translation">
-      <position kp="100" dampratio="1" ctrlrange="-.5 .5"/>
-      <general ctrlrange="-.5 .5"/>
-    </default>
-    <default class="rotation">
-      <!--
-      Note that the rotational control range is purposefully limited to (-pi/2, pi/2) to avoid the
-      documented instabillity near pi, which is due to taking quaternion differences.
-      Increase this range to pi or bigger in order to see the instabillity.
-      See here for more details https://mujoco.readthedocs.io/en/latest/XMLreference.html#actuator
-      -->
-      <position kp="5" dampratio="1" ctrlrange="-1.571 1.571"/>
-      <general ctrlrange="-1.571 1.571"/>
-    </default>
-  </default>
-
   <visual>
     <headlight diffuse=".8 .8 .8" ambient=".2 .2 .2" specular="1 1 1"/>
     <rgba force="1 0 0 1"/>
@@ -46,20 +29,6 @@
     </body>
   </worldbody>
 
-  <actuator>
-    <general name="LRTx" site="leap_base" refsite="reference" gear="1 0 0 0 0 0" class="translation"/>
-    <general name="LRTy" site="leap_base" refsite="reference" gear="0 1 0 0 0 0" class="translation"/>
-    <general name="LRTz" site="leap_base" refsite="reference" gear="0 0 1 0 0 0" class="translation"/>
-    <general name="LRRx" site="leap_base" refsite="reference" gear="0 0 0 1 0 0" class="rotation"/>
-    <general name="LRRy" site="leap_base" refsite="reference" gear="0 0 0 0 1 0" class="rotation"/>
-    <general name="LRRz" site="leap_base" refsite="reference" gear="0 0 0 0 0 1" class="rotation"/>
-    <!--
-    <general name="LRTx" joint="LRTx" ctrlrange="-0.25 0.25" biastype="affine" gainprm="500 0 0" biasprm="0 -200 0"/>
-    <general name="LRTy" joint="LRTy" ctrlrange="-0.25 0.25" biastype="affine" gainprm="500 0 0" biasprm="0 -200 0"/>
-    <general name="LRTz" joint="LRTz" ctrlrange="-0.5 0.5" biastype="affine" gainprm="500 0 0" biasprm="0 -200 0"/>
-    -->
-  </actuator>
-
   <sensor>
     <!-- mug. -->
     <framepos name="mug_position" objtype="body" objname="mug"/>
@@ -68,7 +37,8 @@
     <contact name="mug_contact_with_if_tip" geom1="mug" geom2="if_tip" data="found force"/>
     <contact name="mug_contact_with_mf_tip" geom1="mug" geom2="mf_tip" data="found force"/>
     <contact name="mug_contact_with_rf_tip" geom1="mug" geom2="rf_tip" data="found force"/>
-    <framepos name="mug_distance_to_grasp" objtype="body" objname="mug" reftype="site" refname="grasp_site"/>
+    <framepos name="mug_distance_to_grasp" objtype="site" objname="mug_handle_center" reftype="site"
+              refname="grasp_site"/>
     <framepos name="mug_distance_to_target" objtype="body" objname="mug" reftype="body" refname="target"/>
     <framequat name="mug_orientation" objtype="body" objname="mug"/>
     <framequat name="mug_orientation_from_target" objtype="body" objname="mug" reftype="body" refname="target"/>

@@ -48,7 +48,6 @@
               quat="0.708101 0.705072 -0.0294902 -0.024426" type="box" friction="0.7 0.05 0.0002" rgba=".5 .5 .5 .3"/>
       </default>
 
-      <position kp="3.0" inheritrange="1"/>
       <!-- armature = rotor inertia * gear ratio^2 = 1.7 * 1e-8 * 288*288 = 0.00149376 -->
       <!-- max torque = 0.2196 = 600/1000*0.366 -->
       <!-- frictionloss = rough guess, small ish value -->
@@ -56,33 +55,57 @@
       <joint axis="0 0 -1" damping="0.2" armature="0.00149376" actuatorfrcrange="-0.2196 0.2196" frictionloss="0.02"/>
 
       <default class="mcp">
+        <position kp="3.0" inheritrange="1"/>
         <joint range="-0.314 2.23"/>
       </default>
       <default class="rot">
+        <position kp="3.0" inheritrange="1"/>
         <joint range="-1.047 1.047"/>
       </default>
       <default class="pip">
+        <position kp="3.0" inheritrange="1"/>
         <joint range="-0.506 1.885"/>
       </default>
       <default class="dip">
+        <position kp="3.0" inheritrange="1"/>
         <joint range="-0.366 2.042"/>
       </default>
       <default class="thumb_cmc">
+        <position kp="3.0" inheritrange="1"/>
         <joint range="-0.349 2.094"/>
       </default>
       <default class="thumb_axl">
+        <position kp="3.0" inheritrange="1"/>
         <joint range="-0.349 2.094"/>
       </default>
       <default class="thumb_mcp">
+        <position kp="3.0" inheritrange="1"/>
         <joint range="-0.47 2.443"/>
       </default>
       <default class="thumb_ipl">
+        <position kp="3.0" inheritrange="1"/>
         <joint range="-1.34 1.88"/>
       </default>
 
       <default class="fabric">
         <geom type="sphere" contype="0" conaffinity="0" density="0" group="4"/>
       </default>
+
+      <default class="translation">
+        <position kp="80" dampratio="3" ctrlrange="-.5 .5"/>
+        <general ctrlrange="-.5 .5"/>
+      </default>
+      <default class="rotation">
+        <!--
+        Note that the rotational control range is purposefully limited to (-pi/2, pi/2) to avoid the
+        documented instabillity near pi, which is due to taking quaternion differences.
+        Increase this range to pi or bigger in order to see the instabillity.
+        See here for more details https://mujoco.readthedocs.io/en/latest/XMLreference.html#actuator
+        -->
+        <position kp="10" dampratio="1" ctrlrange="-1.571 1.571"/>
+        <general ctrlrange="-1.571 1.571"/>
+      </default>
+
     </default>
   </default>
 
@@ -400,6 +423,17 @@
   </worldbody>
 
   <actuator>
+    <general name="LRTx" site="leap_base" refsite="reference" gear="1 0 0 0 0 0" class="translation"/>
+    <general name="LRTy" site="leap_base" refsite="reference" gear="0 1 0 0 0 0" class="translation"/>
+    <general name="LRTz" site="leap_base" refsite="reference" gear="0 0 1 0 0 0" class="translation"/>
+    <general name="LRRx" site="leap_base" refsite="reference" gear="0 0 0 1 0 0" class="rotation"/>
+    <general name="LRRy" site="leap_base" refsite="reference" gear="0 0 0 0 1 0" class="rotation"/>
+    <general name="LRRz" site="leap_base" refsite="reference" gear="0 0 0 0 0 1" class="rotation"/>
+    <!--
+    <general name="LRTx" joint="LRTx" ctrlrange="-0.25 0.25" biastype="affine" gainprm="500 0 0" biasprm="0 -200 0"/>
+    <general name="LRTy" joint="LRTy" ctrlrange="-0.25 0.25" biastype="affine" gainprm="500 0 0" biasprm="0 -200 0"/>
+    <general name="LRTz" joint="LRTz" ctrlrange="-0.5 0.5" biastype="affine" gainprm="500 0 0" biasprm="0 -200 0"/>
+    -->
     <position name="if_mcp_act" joint="if_mcp" class="mcp"/>
     <position name="if_rot_act" joint="if_rot" class="rot"/>
     <position name="if_pip_act" joint="if_pip" class="pip"/>

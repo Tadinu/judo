@@ -1,10 +1,9 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
-from judo import BackendType
-from judo.config import set_config_overrides, get_override_config
+from judo.config import set_config_overrides
 from judo.optimizers.cem import CrossEntropyMethodConfig
 from judo.optimizers.mppi import MPPIConfig
 from judo.optimizers.ps import PredictiveSamplingConfig
-from judo.tasks import AllegroCubeRotateConfig
+from judo.tasks import AllegroCubeRotateConfig, LeapFreeJointObjectPickConfig
 
 
 def set_default_cylinder_push_overrides() -> None:
@@ -241,7 +240,7 @@ def set_default_leap_freejoint_object_pick_overrides() -> None:
         CrossEntropyMethodConfig,
         {
             "num_nodes": 4,
-            "num_rollouts": 32 if AllegroCubeRotateConfig().is_backend_mujoco() else 32,
+            "num_rollouts": 32 if LeapFreeJointObjectPickConfig().is_backend_mujoco() else 32,
             "num_elites": 5,
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
