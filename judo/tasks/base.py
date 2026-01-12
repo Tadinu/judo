@@ -59,6 +59,10 @@ class Task(ABC, Generic[ConfigT]):
 
     config_t: type[ConfigT]
 
+    # NOTE: For C-Rollout backend, only mjSTATE_FULLPHYSICS is supported for `initial_state`
+    # https://mujoco.readthedocs.io/en/latest/python.html#rollout:~:text=length%20nthread.-,initial_state,-is%20an%20nbatch
+    MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY = True
+
     def __init__(self, sim: Optional[Simulation] = None,
                  num_rollout_worlds: int = 1) -> None:
         """Initialize the task."""
@@ -78,6 +82,12 @@ class Task(ABC, Generic[ConfigT]):
         self.mjw_model: mjw.Model = mjw.put_model(self.mj_model) if (backend_type == BackendType.MUJOCO_WARP) else None
         self.mjw_data: mjw.Data = self.mjw_init_data(num_rollout_worlds) if self.mjw_model else None
 
+        # MuJoCo state type
+        self.mj_state_type = (
+            mj.mjtState.mjSTATE_FULLPHYSICS if (self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY and not self.mjw_model)
+            else (mj.mjtState.mjSTATE_TIME | mj.mjtState.mjSTATE_QPOS | mj.mjtState.mjSTATE_QVEL
+                  | mj.mjtState.mjSTATE_MOCAP_POS | mj.mjtState.mjSTATE_MOCAP_QUAT))
+
         # Newton models (sim + rollout)
         self.usd_path = self.config.usd_path
         self.nt_sim = sim if (backend_type == BackendType.NEWTON) else None
@@ -96,6 +106,10 @@ class Task(ABC, Generic[ConfigT]):
             # Init state sim->rollout copy funcs
             self.nt_init_sim_to_rollout_copy_functions()
             self.nt_init_models(num_rollout_worlds)
+
+        # Goal
+        self.goal_pos = self.config.goal_pos
+        self.goal_quat = self.config.goal_quat
 
     def mjw_init_data(self, num_rollout_worlds: int) -> mjw.Data:
         self.mjw_data = mjw.put_data(self.mj_model, self.mj_data, nworld=num_rollout_worlds,
@@ -258,7 +272,7 @@ class Task(ABC, Generic[ConfigT]):
         if self.mj_model:
             self.mj_data.qpos = np.zeros_like(self.mj_data.qpos)
             self.mj_data.qvel = np.zeros_like(self.mj_data.qvel)
-            mujoco.mj_forward(self.mj_model, self.mj_data)
+            mj.mj_forward(self.mj_model, self.mj_data)
         else:
             self.nt_sim.reset()
 

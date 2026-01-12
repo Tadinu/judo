@@ -46,25 +46,22 @@ class MJSimulation(Simulation):
     @property
     def sim_state(self) -> Union[MujocoState, np.ndarray]:
         """Returns the current simulation state."""
+
+        # Get current task's sim state data
+        # Ref: https://colab.research.google.com/github/google-deepmind/mujoco/blob/main/python/rollout.ipynb#scrollTo=082482c7&line=3&uniqifier=1
+        state_type = self.task.mj_state_type
+        current_state_data = np.zeros((mj.mj_stateSize(self.task.mj_sim_model, state_type),))
+        mj.mj_getState(self.task.mj_sim_model, self.task.mj_data, current_state_data, state_type)
+
+        # Return the right one for the backend
         backend_type = self.task.config.sim_backend_type()
         if backend_type == BackendType.MUJOCO_WARP:
-            state_type = mj.mjtState.mjSTATE_PHYSICS
-            current_state = np.zeros(mj.mj_stateSize(self.task.mj_sim_model, state_type))
-            mj.mj_getState(self.task.mj_sim_model, self.task.mj_data, current_state, state_type)
-            return current_state
+            return current_state_data
         else:
             assert backend_type == BackendType.MUJOCO
-            data = self.task.mj_data
-            return MujocoState(
-                time=data.time,
-                qpos=data.qpos,
-                qvel=data.qvel,
-                xpos=data.xpos,
-                xquat=data.xquat,
-                mocap_pos=data.mocap_pos,
-                mocap_quat=data.mocap_quat,
-                sim_metadata=self.task.get_sim_metadata(),
-            )
+            return MujocoState(time=self.task.mj_data.time,
+                               data=current_state_data,
+                               sim_metadata=self.task.get_sim_metadata())
 
     @property
     def timestep(self) -> float:

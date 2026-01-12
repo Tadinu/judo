@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Optional, Union, TYPE_CHECKING
 from pathlib import Path
 
-import mujoco
+import mujoco as mj
 import numpy as np
 
 from judo import MODEL_PATH
@@ -57,7 +57,6 @@ class LeapCube(Task[LeapCubeConfig]):
     def __init__(self, sim: Optional[Simulation] = None, num_rollout_worlds: int = 1) -> None:
         """Initializes the LEAP cube rotation task."""
         super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
-        self.goal_quat = self.config.goal_quat
         self.reset()
 
     def reward(
@@ -104,9 +103,9 @@ class LeapCube(Task[LeapCubeConfig]):
             angle -= 2 * np.pi
         at_goal = np.abs(angle) < 0.4
         if at_goal:
-            self._update_goal_quat()
+            self._update_goal()
 
-    def _update_goal_quat(self) -> None:
+    def _update_goal(self) -> None:
         """Updates the goal quaternion."""
         # generate uniformly random quaternion
         # https://stackoverflow.com/a/44031492
@@ -127,8 +126,8 @@ class LeapCube(Task[LeapCubeConfig]):
         self.mj_data.qpos[:] = self.config.qpos_home
         self.mj_data.qvel[:] = 0.0
         self.mj_data.ctrl[:] = self.config.reset_command
-        self._update_goal_quat()
-        mujoco.mj_forward(self.mj_model, self.mj_data)
+        self._update_goal()
+        mj.mj_forward(self.mj_model, self.mj_data)
 
     def get_sim_metadata(self) -> dict[str, Any]:
         """Returns the simulation's goal quat."""

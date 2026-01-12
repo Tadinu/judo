@@ -206,9 +206,9 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
             angle -= 2 * np.pi
         at_goal = np.abs(angle) < 0.4
         if at_goal:
-            self._update_goal_quat()
+            self._update_goal()
 
-    def _update_goal_quat(self) -> None:
+    def _update_goal(self) -> None:
         """Updates the goal quaternion."""
         # generate uniformly random quaternion
         # https://stackoverflow.com/a/44031492
@@ -232,7 +232,7 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
             self.mj_data.qpos[:] = self.config.qpos_home
             self.mj_data.qvel[:] = 0.0
             self.mj_data.ctrl[:] = self.config.reset_command
-            self._update_goal_quat()
+            self._update_goal()
             mj.mj_forward(self.mj_model, self.mj_data)
         else:
             pass

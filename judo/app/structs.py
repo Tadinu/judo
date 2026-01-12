@@ -7,6 +7,8 @@ from typing import Any, Literal
 import numpy as np
 from scipy.interpolate import interp1d
 
+import mujoco as mj
+
 
 class EventType(Enum):
     """Enum for event types."""
@@ -32,12 +34,7 @@ class MujocoState:
     """Struct for writing simulation states between different threads."""
 
     time: float
-    qpos: np.ndarray
-    qvel: np.ndarray
-    xpos: np.ndarray
-    xquat: np.ndarray
-    mocap_pos: np.ndarray
-    mocap_quat: np.ndarray
+    data: np.ndarray  # Result of mj.mj_getState()
     sim_metadata: dict[str, Any]
 
 

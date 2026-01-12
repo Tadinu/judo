@@ -136,7 +136,7 @@ class MPCApp:
         self.controller.update_action()
         end = time.perf_counter()
 
-        print("plan_time", end - start)
+        # print("plan_time", end - start)
         self.fetch_nominal_control_spline()
         # self.sim.nominal_action = self.controller.action(self.sim.sim_backend.sim_time)
         # print("best action", self.sim.optimal_action)

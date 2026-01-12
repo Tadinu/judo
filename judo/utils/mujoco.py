@@ -55,6 +55,14 @@ def mj_sensor_idx(model: mj.MjModel, sensor_name: str) -> int:
     return model.sensor(sensor_name).adr[0]
 
 
+def mj_get_mocap_id(model: mj.MjModel, mocap_body_name: str) -> int:
+    if False:
+        return model.body(mocap_body_name).mocapid[0]
+    else:
+        mocap_body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, mocap_body_name)
+        return model.body_mocapid[mocap_body_id] if mocap_body_id > -1 else -1
+
+
 class MJRolloutBackend:
     """The backend for conducting multithreaded rollouts."""
 
@@ -74,36 +82,30 @@ class MJRolloutBackend:
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
 
-    def rollout(
-            self,
-            model_data_pairs: list[tuple[MjModel, MjData]],
-            x0: np.ndarray,
-            controls: np.ndarray,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    def rollout(self,
+                model_data_pairs: list[tuple[MjModel, MjData]],
+                x0: np.ndarray,
+                controls: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         """Conduct a rollout depending on the backend."""
         # unpack models into a list of models and data
         ms, ds = zip(*model_data_pairs, strict=True)
         ms = list(ms)
         ds = list(ds)
+        num_rollouts = len(ms)
 
         # getting shapes
-        nq = ms[0].nq
-        nv = ms[0].nv
         nu = ms[0].nu
 
-        # the state passed into mujoco's rollout function includes the time
-        # shape = (num_rollouts, num_states + 1)
-        x0_batched = np.tile(x0, (len(ms), 1))
-        full_states = np.concatenate([time.time() * np.ones((len(ms), 1)), x0_batched], axis=-1)
-        assert full_states.shape[-1] == nq + nv + 1
-        assert full_states.ndim == 2
+        # Ref: https://colab.research.google.com/github/google-deepmind/mujoco/blob/main/python/rollout.ipynb#scrollTo=082482c7&line=3&uniqifier=1
+        # x0_batched's shape = (num_rollouts, num_states or len(x0))
+        x0_batched = np.tile(x0, (num_rollouts, 1))
         assert controls.ndim == 3
         assert controls.shape[-1] == nu
-        assert controls.shape[0] == full_states.shape[0]
+        assert controls.shape[0] == x0_batched.shape[0]
 
         # rollout
         if self.backend == BackendType.MUJOCO:
-            _states, _out_sensors = self.rollout_func(ms, ds, full_states, controls)
+            _states, _out_sensors = self.rollout_func(ms, ds, x0_batched, controls)
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
         out_states = np.array(_states)[..., 1:]  # remove time from state

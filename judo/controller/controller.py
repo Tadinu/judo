@@ -16,7 +16,7 @@ from scipy.interpolate import interp1d
 from judo import BackendType
 from judo.app.structs import MujocoState, SplineData
 from judo.app.utils import register_optimizers_from_cfg, register_tasks_from_cfg
-from judo.config import OverridableConfig, get_override_config
+from judo.config import OverridableConfig
 from judo.gui import slider
 from judo.optimizers import Optimizer, OptimizerConfig, get_registered_optimizers
 from judo.tasks import Task, TaskConfig, get_registered_tasks
@@ -98,7 +98,7 @@ class Controller:
         self.mj_model_data_pairs = mj_make_model_data_pairs(self.mj_model,
                                                             self.optimizer_cfg.num_rollouts) \
             if rollout_backend == BackendType.MUJOCO else None
-        self.mj_state_type = mj.mjtState.mjSTATE_PHYSICS
+        self.mj_state_type = self.task.mj_state_type
 
         # - MJ-C backend
         self.mj_rollout_backend = MJRolloutBackend(num_threads=self.optimizer_cfg.num_rollouts, backend=rollout_backend) \
@@ -275,8 +275,11 @@ class Controller:
                 self.task.mjw_init_data(self.optimizer_cfg.num_rollouts)
                 self.mjw_rollout_backend.set_model(self.mj_model, self.task.mjw_model, self.task.mjw_data)
         elif self.mj_model:
-            assert self.mj_current_state.shape == (self.mj_model.nq + self.mj_model.nv,), \
-                "[MuJoCo backend]: Current state must be of shape (nq + nv,)"
+            state_size = mj.mj_stateSize(self.mj_model, self.mj_state_type)
+            current_state_size = len(self.mj_current_state)
+            assert current_state_size == state_size, \
+                (f"[MuJoCo-C Rollout backend]: Current state's size {current_state_size} does not match"
+                 f"size {state_size} of the configured state type {self.mj_state_type}.")
             if len(self.mj_model_data_pairs) != self.optimizer_cfg.num_rollouts:
                 self.mj_model_data_pairs = mj_make_model_data_pairs(self.mj_model, self.optimizer_cfg.num_rollouts)
                 self.mj_rollout_backend.update(self.optimizer_cfg.num_rollouts)
@@ -454,11 +457,12 @@ class Controller:
             self.mj_current_state = state
         elif self.mj_model:
             assert isinstance(state, MujocoState)
-            self.mj_current_state = np.concatenate([state.qpos, state.qvel])
+            self.mj_current_state = state.data
             self.time = state.time
             self.system_metadata = state.sim_metadata
         else:
             # Write sim-backend's state -> rollout-backend's state
+            assert isinstance(state, newton.State)
             self.task.nt_copy_sim_to_rollout_state(sim_state=state, rollout_state=self.nt_rollout_backend.state_0,
                                                    num_rollout_worlds=self.nt_rollout_backend.model_builder.num_worlds)
 
