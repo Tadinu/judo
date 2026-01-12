@@ -1,0 +1,15 @@
+<mujoco model="simple_spatula">
+  <!--<include file="../cube/reorientation_cookie.xml"/>-->
+  <worldbody>
+    <light pos="0 0 1" />
+    <!--<geom name="floor" size="0 0 0.05" type="plane"/>-->
+    <body name="spatula" pos="0.11 0.0 0.1" quat="1 0 0 0">
+      <!-- tighter (less soft) contact solver parameters to improve blade's collision given its low thickness! -->
+      <geom name="spatula" type="capsule" pos="0 -0.1 0" quat="0.707107 0.707107 0 0" size=".005 .1 0" rgba="1 0 0 1"
+            solimp="0.9 0.95 0.001" solref="0.005 1"/>
+      <geom name="blade" type="ellipsoid" pos="0 0.05 0 " size=".05 .05 .001" rgba="0 1 0 1"
+            solimp="0.9 0.95 0.001" solref="0.005 1"/>
+      <site name="grasp_site" pos="0. 0.05 0.003" size="0.005" rgba="1 0 0 1"/>
+    </body>
+  </worldbody>
+</mujoco>
