@@ -19,7 +19,7 @@ from judo.app.utils import get_class_from_string
 
 # mjmanip
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
-from mjmanip.utils import mj_draw_spheres, mj_clear_scene
+from mjmanip.utils import mj_clear_scene, mj_draw_spheres, mj_draw_text
 
 
 class MPCApp:
@@ -32,10 +32,11 @@ class MPCApp:
                  fabric_cfg: Optional[ArmHandPoseFabricConfig] = None) -> None:
         """Initialize the simulation node."""
         self.task_name = task_name
+        self.step_cnt = 0
 
         # 1- Sim
-        config_cls = get_class_from_string(optimizer_registration_cfg[optimizer_name].config)
-        num_rollouts = get_override_config(config_cls, task_name)["num_rollouts"]
+        optimizer_config_cls = get_class_from_string(optimizer_registration_cfg[optimizer_name].config)
+        num_rollouts = get_override_config(optimizer_config_cls, task_name)["num_rollouts"]
         match sim_backend_type:
             case BackendType.MUJOCO | BackendType.MUJOCO_WARP:
                 self.sim = MJSimulation(init_task=task_name,
@@ -51,11 +52,14 @@ class MPCApp:
         # 2- Fabrics computation agent
         if fabric_cfg and FABRICS_MPC_TYPE:
             self.sim.fabrics_agent = FabricsAgent(self.sim.task.mj_sim_model, self.sim.task.mj_data,
-                                                  fabric_cfg, num_rollout_worlds=1)
+                                                  fabric_cfg, num_rollout_worlds=1, num_fabrics_steps=1)
             self.sim.task.fabrics_agent = FabricsAgent(self.sim.task.mj_model, self.sim.task.mj_data,
-                                                       fabric_cfg, num_rollout_worlds=num_rollouts)
-            self.sim.task.map_controls = self.sim.task.fabrics_agent.fabrics_plan
-            print("FABRICS SUBSTEPS", FabricsAgent.NUM_FABRICS_STEPS)
+                                                       fabric_cfg, num_rollout_worlds=num_rollouts,
+                                                       num_fabrics_steps=10)
+            self.sim.task.map_controls = self.sim.task.fabrics_agent.hand_pca_to_q \
+                if FabricsAgent.USE_PCA_HAND_GRASP else self.sim.task.fabrics_agent.fabrics_plan
+            print("FABRICS SUBSTEPS: Task Rollout", self.sim.task.fabrics_agent.num_fabrics_steps,
+                  "Sim", self.sim.fabrics_agent.num_fabrics_steps)
 
         # 3- Controller
         # NOTE: Controller uses task's nu to initiate its mpc-algo/optimizer so must be after fabrics_agent,
@@ -95,17 +99,19 @@ class MPCApp:
     def mj_spin(self):
         main_model = self.sim.task.mj_sim_model
         main_data = self.sim.task.mj_data
+        num_steps = self.sim.task.fabrics_agent.num_fabrics_steps if self.sim.task.fabrics_agent else 1
         with mj.viewer.launch_passive(model=main_model, data=main_data, show_left_ui=False,
                                       show_right_ui=False) as viewer:
             mj.mjv_defaultFreeCamera(main_model, viewer.cam)
             while viewer.is_running():
                 mj.mj_camlight(main_model, main_data)
-                if self.synchronous_controller:
+                if self.synchronous_controller and self.step_cnt % num_steps == 0:
                     self.write_state_to_controller()
                     self.plan()
-                    self.mj_visualize_traces(viewer.user_scn)
+                self.mj_visualize_traces(viewer.user_scn)
                 self.sim.step()
                 viewer.sync()
+                self.step_cnt += 1
             viewer.close()
 
     def mj_visualize_traces(self, scene):
@@ -114,6 +120,8 @@ class MPCApp:
         fabrics_traces = self.sim.fabrics_agent.sampled_target_traces if self.sim.fabrics_agent else None
         if fabrics_traces:
             mj_draw_spheres(scene, fabrics_traces, [0.01] * len(fabrics_traces))
+        if hasattr(self.sim.task, "cur_phase"):
+            mj_draw_text(scene, self.sim.task.cur_phase.name)
 
     def nt_spin(self):
         viewer = self.sim.sim_backend.viewer

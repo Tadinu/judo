@@ -1,6 +1,9 @@
 from __future__ import annotations
+
+import enum
 from dataclasses import dataclass, field
-from typing import Any, Optional, TYPE_CHECKING
+from typing import Any, Optional, TypeAlias, TYPE_CHECKING
+from enum import Enum
 
 import numpy as np
 
@@ -29,6 +32,17 @@ from mjmanip.robot.leap_fabrics import LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \
     LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES
 
 OBJ_NAME = LeapWithFabrics.OBJECT_NAMES[0]
+
+
+class LeapFreeJointObjectPickPhase(Enum):
+    """Defines the phases of the Leap Free-joint object pick task."""
+
+    REACHING_OBJ = enum.auto()
+    ORIENTATING_OBJ = enum.auto()
+    BRINGING_OBJ_TO_GOAL = enum.auto()
+
+
+__Phase: TypeAlias = LeapFreeJointObjectPickPhase
 
 
 @slider("w_pos", 0.0, 200.0)
@@ -80,14 +94,14 @@ class LeapFreeJointObjectPick(LeapCube):
         self.leap_base_id = mj.mj_name2id(self.mj_model, mj.mjtObj.mjOBJ_BODY, "leap_mount")
         self.obj_pos_distance_to_grasp_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_grasp")
 
-        if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
-            self.target_mocap_id = mj_get_mocap_id(self.mj_model, "target")
-        else:
-            # NOTE: This is only useful once MuJoCo-C Rollout backend supports mocap_pos/quat also for the `initial_state`
-            self.obj_quat_distance_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_orientation_from_target")
-            # self.grasp_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index("grasp_distance_from_target")
-            self.obj_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_target")
+        self.target_mocap_id = mj_get_mocap_id(self.mj_model, "target")
+        # NOTE: For rollout result analysis, these are only valid IF MuJoCo-C Rollout backend supports mocap_pos/quat
+        # for the `initial_state`
+        self.obj_quat_distance_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_orientation_from_target")
+        # self.grasp_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index("grasp_distance_from_target")
+        self.obj_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_target")
         self.reach_threshold = 0.1 if self.fabrics_agent else 0.015 if OBJ_NAME == "cube" else 0.05
+        self.orientation_threshold = 0.0001
 
     @LeapCube.nu.getter
     def nu(self) -> int:
@@ -124,6 +138,23 @@ class LeapFreeJointObjectPick(LeapCube):
             return limits
         else:
             return super().actuator_ctrlrange
+
+    @property
+    def cur_phase(self) -> LeapFreeJointObjectPickPhase:
+        # Phase 1: Reaching obj
+        cur_sensor_data = self.mj_data.sensordata
+        obj_reaching_err = cur_sensor_data[self.obj_pos_distance_to_grasp_sensor_idx:
+                                           self.obj_pos_distance_to_grasp_sensor_idx + 3]
+        if np.square(obj_reaching_err).sum() > self.reach_threshold ** 2:
+            return LeapFreeJointObjectPickPhase.REACHING_OBJ
+
+        # Phase 2: Orientating Obj/Bringing Obj to Goal
+        obj_orientation_err = cur_sensor_data[self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
+        goal_err_quat = np.array([1.0, 0.0, 0.0, 0.0])
+        if np.square(np_quat_diff_so3(obj_orientation_err, goal_err_quat)).sum() > self.orientation_threshold ** 2:
+            return LeapFreeJointObjectPickPhase.ORIENTATING_OBJ
+
+        return LeapFreeJointObjectPickPhase.BRINGING_OBJ_TO_GOAL
 
     def reward(self,
                states: np.ndarray,

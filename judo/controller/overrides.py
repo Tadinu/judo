@@ -102,9 +102,8 @@ def set_default_leap_freejoint_object_pick_overrides() -> None:
         "leap_freejoint_object_pick",
         ControllerConfig,
         {
-            "horizon": 1.0 if FabricsAgent.USE_PCA_HAND_GRASP or
-                              FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
-                              FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 1.0,
+            "horizon": 0.05 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
+                               FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 1.0,
             "spline_order": SplineType.CUBIC.name,
             "max_num_traces": 1,
             "action_normalizer": NormalizerType.MIN_MAX.name

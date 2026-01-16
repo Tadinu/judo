@@ -28,7 +28,7 @@ class FabricsMPCType(Enum):
     FINGER_EE_MULTI_TASK_SPACES = enum.auto()
 
 
-FABRICS_MPC_TYPE = None  # FabricsMPCType.FINGER_EE_SINGLE_TASK_SPACE
+FABRICS_MPC_TYPE = FabricsMPCType.FINGER_EE_SINGLE_TASK_SPACE
 
 
 class FabricsAgent:
@@ -38,17 +38,18 @@ class FabricsAgent:
     HAND_DOFS_NO: int = LeapWithFabrics.HAND_DOFS_NO
     FINGER_EES_DOFS_NO: int = 6 * (len(LeapWithFabrics.FINGER_TIPS_NAMES) if USE_FINGER_EE_MULTI_TASK_SPACES else 1)
     FINGER_EES_TARGET_SITE: str = "mug_handle_loop_center"
-    NUM_FABRICS_STEPS: int = 10
 
     PALM_FABRIC_CONTROL_FRAMES = LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES
     FINGER_FABRIC_CONTROL_FRAMES = LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES
 
     def __init__(self, sim_model: mj.MjModel, sim_data: mj.MjData,
                  fabric_cfg: ArmHandPoseFabricConfig,
-                 num_rollout_worlds: int = 1):
+                 num_rollout_worlds: int = 1,
+                 num_fabrics_steps: int = 1):
         self.mj_model = sim_model
         self.mj_data = sim_data
         self.num_rollout_worlds = num_rollout_worlds
+        self.num_fabrics_steps = 1 if self.USE_PCA_HAND_GRASP else num_fabrics_steps
         self.fabric_cfg = fabric_cfg
         self.init_fabrics(fabric_cfg)
         self.sampled_target_traces: list[np.ndarray] = []
@@ -65,7 +66,7 @@ class FabricsAgent:
                                          use_finger_fabrics=self.USE_FINGER_EE_MULTI_TASK_SPACES or
                                                             self.USE_FINGER_EE_SINGLE_TASK_SPACE,
                                          use_cuda_graph=True,
-                                         num_fabrics_steps=self.NUM_FABRICS_STEPS,
+                                         num_fabrics_steps=self.num_fabrics_steps,
                                          batch_size=self.num_rollout_worlds)
         fabrics_env.init()
         self.fabrics_robot = fabrics_env.robot
@@ -75,6 +76,7 @@ class FabricsAgent:
         if self.USE_PCA_HAND_GRASP:
             self.hand_pca_values = torch.zeros_like(self.fabrics_controller.hand_pca_targets)
             self.HAND_PCA_DIM = self.hand_pca_values.shape[-1]
+            self.HAND_PCA_MATRIX = self.fabrics_controller.pose_fabric.pca_matrix.cpu().numpy()
         elif self.USE_FINGER_EE_MULTI_TASK_SPACES:
             self.finger_target_poses = {finger_ee_name: torch.clone(finger_target) for finger_ee_name, finger_target in
                                         self.fabrics_controller.finger_targets.items()}
@@ -83,6 +85,24 @@ class FabricsAgent:
             self.finger_target_poses = {finger_ee_name: torch.zeros((self.num_rollout_worlds, 7),
                                                                     device=MJMANIP_DEVICE) for
                                         finger_ee_name in list(self.fabrics_controller.finger_targets.keys())}
+
+    def hand_pca_to_q(self, rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
+        num_rollouts, num_steps = rollout_controls.shape[:2]
+        out_rollout_controls = np.zeros((num_rollouts, num_steps, self.mj_model.nu))
+
+        # Wrist ctrls
+        wrist_ctrls = rollout_controls[..., :-self.HAND_PCA_DIM]
+        wrist_dofs_no = wrist_ctrls.shape[-1]
+        out_rollout_controls[..., :wrist_dofs_no] = wrist_ctrls
+
+        # PCA->Q ctrls
+        for step in range(num_steps):
+            rl_ctrl = rollout_controls[..., step, :]
+            pca = rl_ctrl[..., -self.HAND_PCA_DIM:]
+
+            # Save result q back to [rollout_controls]
+            out_rollout_controls[..., step, wrist_dofs_no:] = pca @ np.linalg.pinv(self.HAND_PCA_MATRIX.T)
+        return out_rollout_controls
 
     def fabrics_plan(self, rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
         # Prep
@@ -146,10 +166,9 @@ class FabricsAgent:
                     self.sampled_target_traces.extend(new_ee_target_pose[..., :3].tolist())
 
                 # Fabrics rollout
-                for _ in range(self.NUM_FABRICS_STEPS):
-                    self.fabrics_controller.step(new_finger_targets=self.finger_target_poses,
-                                                 cur_q=torch.as_tensor(cur_q, device=MJMANIP_DEVICE),
-                                                 cur_qd=torch.as_tensor(cur_qd, device=MJMANIP_DEVICE))
+                self.fabrics_controller.step(new_finger_targets=self.finger_target_poses,
+                                             cur_q=torch.as_tensor(cur_q, device=MJMANIP_DEVICE),
+                                             cur_qd=torch.as_tensor(cur_qd, device=MJMANIP_DEVICE))
 
                 # Save result q back to [rollout_controls]
                 out_rollout_controls[..., step, wrist_dofs_no:] = (
@@ -185,10 +204,9 @@ class FabricsAgent:
                         self.sampled_target_traces.extend(new_ee_target_pose[..., :3].tolist())
 
                 # Fabrics rollout
-                for _ in range(self.NUM_FABRICS_STEPS):
-                    self.fabrics_controller.step(new_finger_targets=self.finger_target_poses,
-                                                 cur_q=torch.as_tensor(cur_q, device=MJMANIP_DEVICE),
-                                                 cur_qd=torch.as_tensor(cur_qd, device=MJMANIP_DEVICE))
+                self.fabrics_controller.step(new_finger_targets=self.finger_target_poses,
+                                             cur_q=torch.as_tensor(cur_q, device=MJMANIP_DEVICE),
+                                             cur_qd=torch.as_tensor(cur_qd, device=MJMANIP_DEVICE))
 
                 # Save result q back to [rollout_controls]
                 out_rollout_controls[..., step, wrist_dofs_no:] = (
