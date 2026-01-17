@@ -55,7 +55,7 @@ class MPCApp:
                                                   fabric_cfg, num_rollout_worlds=1, num_fabrics_steps=1)
             self.sim.task.fabrics_agent = FabricsAgent(self.sim.task.mj_model, self.sim.task.mj_data,
                                                        fabric_cfg, num_rollout_worlds=num_rollouts,
-                                                       num_fabrics_steps=10)
+                                                       num_fabrics_steps=100)
             self.sim.task.map_controls = self.sim.task.fabrics_agent.hand_pca_to_q \
                 if FabricsAgent.USE_PCA_HAND_GRASP else self.sim.task.fabrics_agent.fabrics_plan
             print("FABRICS SUBSTEPS: Task Rollout", self.sim.task.fabrics_agent.num_fabrics_steps,
@@ -99,7 +99,7 @@ class MPCApp:
     def mj_spin(self):
         main_model = self.sim.task.mj_sim_model
         main_data = self.sim.task.mj_data
-        num_steps = self.sim.task.fabrics_agent.num_fabrics_steps if self.sim.task.fabrics_agent else 1
+        num_steps = int(self.sim.task.fabrics_agent.num_fabrics_steps / 3) if self.sim.task.fabrics_agent else 1
         with mj.viewer.launch_passive(model=main_model, data=main_data, show_left_ui=False,
                                       show_right_ui=False) as viewer:
             mj.mjv_defaultFreeCamera(main_model, viewer.cam)

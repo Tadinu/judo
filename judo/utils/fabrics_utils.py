@@ -28,7 +28,7 @@ class FabricsMPCType(Enum):
     FINGER_EE_MULTI_TASK_SPACES = enum.auto()
 
 
-FABRICS_MPC_TYPE = FabricsMPCType.FINGER_EE_SINGLE_TASK_SPACE
+FABRICS_MPC_TYPE = None  # FabricsMPCType.FINGER_EE_SINGLE_TASK_SPACE
 
 
 class FabricsAgent:
@@ -58,21 +58,21 @@ class FabricsAgent:
     def init_fabrics(self, fabric_cfg: ArmHandPoseFabricConfig) -> None:
         LeapWithFabricsEnv.FINGER_FABRIC_CONTROL_FRAMES = ["if_ds_fabric1", "mf_ds_fabric1",
                                                            "rf_ds_fabric1", "th_ds_fabric1"]
-        fabrics_env = LeapWithFabricsEnv(arm_hand_class=LeapWithFabrics,
-                                         world_scene_xml=DEFAULT_SCENE_XML_PATH,
-                                         arm_xml=HAND_XML_PATH,
-                                         hand_xml=None,
-                                         fabric_cfg=fabric_cfg,
-                                         use_finger_fabrics=self.USE_FINGER_EE_MULTI_TASK_SPACES or
-                                                            self.USE_FINGER_EE_SINGLE_TASK_SPACE,
-                                         use_cuda_graph=True,
-                                         num_fabrics_steps=self.num_fabrics_steps,
-                                         batch_size=self.num_rollout_worlds)
-        fabrics_env.init()
-        self.fabrics_robot = fabrics_env.robot
+        self.fabrics_env = LeapWithFabricsEnv(arm_hand_class=LeapWithFabrics,
+                                              world_scene_xml=DEFAULT_SCENE_XML_PATH,
+                                              arm_xml=HAND_XML_PATH,
+                                              hand_xml=None,
+                                              fabric_cfg=fabric_cfg,
+                                              use_finger_fabrics=self.USE_FINGER_EE_MULTI_TASK_SPACES or
+                                                                 self.USE_FINGER_EE_SINGLE_TASK_SPACE,
+                                              use_cuda_graph=True,
+                                              num_fabrics_steps=self.num_fabrics_steps,
+                                              batch_size=self.num_rollout_worlds)
+        self.fabrics_env.init()
+        self.fabrics_world = self.fabrics_env.world
 
         # NOTE: MjData is created here-in if needed in robot's configuration
-        self.fabrics_controller = fabrics_env.fabrics_controller
+        self.fabrics_controller = self.fabrics_env.fabrics_controller
         if self.USE_PCA_HAND_GRASP:
             self.hand_pca_values = torch.zeros_like(self.fabrics_controller.hand_pca_targets)
             self.HAND_PCA_DIM = self.hand_pca_values.shape[-1]
@@ -115,8 +115,11 @@ class FabricsAgent:
             self.common_finger_ee_target = mj_get_site_pose(self.mj_data, self.FINGER_EES_TARGET_SITE, True)
 
         # Update [fabrics_controller]'s q, qdd with [current_state]
-        cur_q = current_state[..., self.fabrics_robot.robot_qpos_ids]
-        cur_qd = current_state[..., self.fabrics_robot.robot_dof_ids]
+        cur_robot_q = current_state[self.fabrics_world.robot_qpos_ids]
+        cur_robot_qd = current_state[self.fabrics_world.robot_dof_ids]
+        # NOTE: objs here must be free-joint objs to have their qpos as poses
+        cur_obj_poses = {obj_name: current_state[self.fabrics_world.obj_qpos_ids[obj_name]]
+                         for obj_name in self.fabrics_world.OBJECT_NAMES}
 
         num_rollouts, num_steps = rollout_controls.shape[:2]
         out_rollout_controls = np.zeros((num_rollouts, num_steps, self.mj_model.nu))
@@ -132,10 +135,11 @@ class FabricsAgent:
 
                 # Fabrics rollout
                 # TODO: VERIFY IF cur_q, cur_qd ARE NEEDED HERE
-                # -> LIKELY YES TO MAKE FABRICS SOLVE FROM CURRENT Q/QD
+                # -> LIKELY YES TO MAKE FABRICS SOLVE FROM CURRENT Q/QD, BUT IT CAN ALSO SLOW IT DOWN
                 self.fabrics_controller.step(new_hand_pca_targets=self.hand_pca_values,
-                                             cur_q=torch.as_tensor(cur_q, device=MJMANIP_DEVICE),
-                                             cur_qd=torch.as_tensor(cur_qd, device=MJMANIP_DEVICE))
+                                             cur_robot_q=torch.as_tensor(cur_robot_q, device=MJMANIP_DEVICE),
+                                             cur_robot_qd=torch.as_tensor(cur_robot_qd, device=MJMANIP_DEVICE),
+                                             cur_obj_poses=cur_obj_poses)
 
                 # Save result q back to [rollout_controls]
                 out_rollout_controls[..., step, wrist_dofs_no:] = (
@@ -167,8 +171,9 @@ class FabricsAgent:
 
                 # Fabrics rollout
                 self.fabrics_controller.step(new_finger_targets=self.finger_target_poses,
-                                             cur_q=torch.as_tensor(cur_q, device=MJMANIP_DEVICE),
-                                             cur_qd=torch.as_tensor(cur_qd, device=MJMANIP_DEVICE))
+                                             cur_robot_q=torch.as_tensor(cur_robot_q, device=MJMANIP_DEVICE),
+                                             cur_robot_qd=torch.as_tensor(cur_robot_qd, device=MJMANIP_DEVICE),
+                                             cur_obj_poses=cur_obj_poses)
 
                 # Save result q back to [rollout_controls]
                 out_rollout_controls[..., step, wrist_dofs_no:] = (
@@ -205,8 +210,9 @@ class FabricsAgent:
 
                 # Fabrics rollout
                 self.fabrics_controller.step(new_finger_targets=self.finger_target_poses,
-                                             cur_q=torch.as_tensor(cur_q, device=MJMANIP_DEVICE),
-                                             cur_qd=torch.as_tensor(cur_qd, device=MJMANIP_DEVICE))
+                                             cur_robot_q=torch.as_tensor(cur_robot_q, device=MJMANIP_DEVICE),
+                                             cur_robot_qd=torch.as_tensor(cur_robot_qd, device=MJMANIP_DEVICE),
+                                             cur_obj_poses=cur_obj_poses)
 
                 # Save result q back to [rollout_controls]
                 out_rollout_controls[..., step, wrist_dofs_no:] = (

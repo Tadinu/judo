@@ -1,5 +1,5 @@
-<mujoco model="leap_rh_fabric_freejoint_mug_sim">
-  <include file="leap_rh_fabric_freejoint.xml"/>
+<mujoco model="leap_rh_freejoint_mug_sim">
+  <include file="leap_rh_freejoint.xml"/>
   <include file="objects/mug/mug.xml"/>
 
   <statistic center="0.15 0 0" extent="0.4" meansize="0.01"/>

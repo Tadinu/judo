@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import enum
 from dataclasses import dataclass, field
-from typing import Any, Optional, TypeAlias, TYPE_CHECKING
+from typing import Any, Optional, TYPE_CHECKING
 from enum import Enum
 
 import numpy as np
@@ -31,7 +31,7 @@ from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.robot.leap_fabrics import LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \
     LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES
 
-OBJ_NAME = LeapWithFabrics.OBJECT_NAMES[0]
+OBJ_NAME = "cube"  # LeapWithFabrics.OBJECT_NAMES[0]
 
 
 class LeapFreeJointObjectPickPhase(Enum):
@@ -40,9 +40,6 @@ class LeapFreeJointObjectPickPhase(Enum):
     REACHING_OBJ = enum.auto()
     ORIENTATING_OBJ = enum.auto()
     BRINGING_OBJ_TO_GOAL = enum.auto()
-
-
-__Phase: TypeAlias = LeapFreeJointObjectPickPhase
 
 
 @slider("w_pos", 0.0, 200.0)
@@ -92,16 +89,24 @@ class LeapFreeJointObjectPick(LeapCube):
         self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [f"{OBJ_NAME}_freejoint"])
         self.obj_pos_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_position")
         self.leap_base_id = mj.mj_name2id(self.mj_model, mj.mjtObj.mjOBJ_BODY, "leap_mount")
-        self.obj_pos_distance_to_grasp_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_grasp")
-
         self.target_mocap_id = mj_get_mocap_id(self.mj_model, "target")
+
+        # distance sensors
+        self.obj_pos_distance_to_grasp_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_grasp")
         # NOTE: For rollout result analysis, these are only valid IF MuJoCo-C Rollout backend supports mocap_pos/quat
         # for the `initial_state`
         self.obj_quat_distance_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_orientation_from_target")
         # self.grasp_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index("grasp_distance_from_target")
         self.obj_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_target")
-        self.reach_threshold = 0.1 if self.fabrics_agent else 0.015 if OBJ_NAME == "cube" else 0.05
+        self.reach_threshold = 0.1 if self.fabrics_agent else 0.015 if OBJ_NAME == "cube" else 0.07
         self.orientation_threshold = 0.0001
+        self.last_obj_distance_to_goal = 0.
+
+        # contact sensors
+        self.obj_contact_with_finger_tip_sensors = {
+            finger_tip: self.get_sensor_start_index(f"{OBJ_NAME}_contact_with_{finger_tip}")
+            for finger_tip in LeapMjx.FINGER_TIPS_NAMES
+        }
 
     @LeapCube.nu.getter
     def nu(self) -> int:
@@ -152,7 +157,11 @@ class LeapFreeJointObjectPick(LeapCube):
         obj_orientation_err = cur_sensor_data[self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
         goal_err_quat = np.array([1.0, 0.0, 0.0, 0.0])
         if np.square(np_quat_diff_so3(obj_orientation_err, goal_err_quat)).sum() > self.orientation_threshold ** 2:
-            return LeapFreeJointObjectPickPhase.ORIENTATING_OBJ
+            obj_distance_to_goal = np.square(cur_sensor_data[self.obj_pos_distance_to_goal_sensor_idx:
+                                                             self.obj_pos_distance_to_goal_sensor_idx + 3]).sum()
+            if self.last_obj_distance_to_goal > obj_distance_to_goal:
+                self.last_obj_distance_to_goal = obj_distance_to_goal
+                return LeapFreeJointObjectPickPhase.ORIENTATING_OBJ
 
         return LeapFreeJointObjectPickPhase.BRINGING_OBJ_TO_GOAL
 
@@ -186,6 +195,10 @@ class LeapFreeJointObjectPick(LeapCube):
 
         # Stage 3: Obj Grasping cost
         grasp_cost = 0.001 * np.sum(np.square(controls))
+        if OBJ_NAME != "cube":
+            finger_contact_cost = 0.001 * np.sum(np.array([sensors[..., self.obj_contact_with_finger_tip_sensors[f]]
+                                                           for f in LeapMjx.FINGER_TIPS_NAMES]))
+            grasp_cost -= finger_contact_cost
 
         # Stage 4: Obj Bringing-To-Goal cost
         if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
