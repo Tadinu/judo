@@ -105,7 +105,7 @@ class MPCApp:
             mj.mjv_defaultFreeCamera(main_model, viewer.cam)
             while viewer.is_running():
                 mj.mj_camlight(main_model, main_data)
-                if self.synchronous_controller and self.step_cnt % num_steps == 0:
+                if self.synchronous_controller and (self.step_cnt % num_steps == 0 if num_steps > 1 else True):
                     self.write_state_to_controller()
                     self.plan()
                 self.mj_visualize_traces(viewer.user_scn)

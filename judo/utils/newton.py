@@ -129,7 +129,8 @@ class NewtonBackend:
                                               dtype=wp.float32)
 
         # Eval model fk
-        newton.eval_fk(model, model.joint_q, model.joint_qd, model)
+        self.state_0 = model.state()
+        newton.eval_fk(model, model.joint_q, model.joint_qd, self.state_0)
 
         # Model solver
         self.solver = newton.solvers.SolverMuJoCo(model,
@@ -144,7 +145,6 @@ class NewtonBackend:
                                                   use_mujoco_cpu=False)
 
         # States
-        self.state_0 = model.state()
         self.state_1 = model.state()
         self.model_ctrl = model.control()
         self.contacts = model.collide(self.state_0)

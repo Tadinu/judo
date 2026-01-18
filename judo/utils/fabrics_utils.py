@@ -26,15 +26,17 @@ class FabricsMPCType(Enum):
     PCA_HAND_GRASP = enum.auto()
     FINGER_EE_SINGLE_TASK_SPACE = enum.auto()
     FINGER_EE_MULTI_TASK_SPACES = enum.auto()
+    FINGER_EE_MULTI_CIRCULAR_TASK_SPACES = enum.auto()
 
 
-FABRICS_MPC_TYPE = None  # FabricsMPCType.FINGER_EE_SINGLE_TASK_SPACE
+FABRICS_MPC_TYPE = FabricsMPCType.FINGER_EE_MULTI_TASK_SPACES
 
 
 class FabricsAgent:
     USE_PCA_HAND_GRASP: bool = FABRICS_MPC_TYPE is FabricsMPCType.PCA_HAND_GRASP
     USE_FINGER_EE_MULTI_TASK_SPACES: bool = FABRICS_MPC_TYPE is FabricsMPCType.FINGER_EE_MULTI_TASK_SPACES
     USE_FINGER_EE_SINGLE_TASK_SPACE: bool = FABRICS_MPC_TYPE is FabricsMPCType.FINGER_EE_SINGLE_TASK_SPACE
+    USE_FINGER_EE_MULTI_CIRCULAR_TASK_SPACES: bool = FABRICS_MPC_TYPE is FabricsMPCType.FINGER_EE_MULTI_CIRCULAR_TASK_SPACES
     HAND_DOFS_NO: int = LeapWithFabrics.HAND_DOFS_NO
     FINGER_EES_DOFS_NO: int = 6 * (len(LeapWithFabrics.FINGER_TIPS_NAMES) if USE_FINGER_EE_MULTI_TASK_SPACES else 1)
     FINGER_EES_TARGET_SITE: str = "mug_handle_loop_center"
@@ -56,8 +58,8 @@ class FabricsAgent:
         self.is_for_rollout = (num_rollout_worlds > 1)
 
     def init_fabrics(self, fabric_cfg: ArmHandPoseFabricConfig) -> None:
-        LeapWithFabricsEnv.FINGER_FABRIC_CONTROL_FRAMES = ["if_ds_fabric1", "mf_ds_fabric1",
-                                                           "rf_ds_fabric1", "th_ds_fabric1"]
+        LeapWithFabricsEnv.FINGER_FABRIC_CONTROL_FRAMES = ["if_ds_fabric2", "mf_ds_fabric2",
+                                                           "rf_ds_fabric2", "th_ds_fabric2"]
         self.fabrics_env = LeapWithFabricsEnv(arm_hand_class=LeapWithFabrics,
                                               world_scene_xml=DEFAULT_SCENE_XML_PATH,
                                               arm_xml=HAND_XML_PATH,
@@ -218,5 +220,8 @@ class FabricsAgent:
                 out_rollout_controls[..., step, wrist_dofs_no:] = (
                     self.fabrics_controller.q.clone().detach().cpu().numpy())
             return out_rollout_controls
+
+        elif self.USE_FINGER_EE_MULTI_CIRCULAR_TASK_SPACES:
+            return rollout_controls
         else:
             return rollout_controls
