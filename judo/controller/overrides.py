@@ -109,3 +109,19 @@ def set_default_leap_freejoint_object_pick_overrides() -> None:
             "action_normalizer": NormalizerType.MIN_MAX.name
         },
     )
+
+
+def set_default_leap_object_rotate_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the leap cube down task."""
+    from judo.utils.fabrics_utils import FabricsAgent
+    set_config_overrides(
+        "leap_object_rotate",
+        ControllerConfig,
+        {
+            "horizon": 0.1 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
+                              FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 1.0,
+            "spline_order": SplineType.CUBIC.name,
+            "max_num_traces": 1,
+            "action_normalizer": NormalizerType.MIN_MAX.name
+        },
+    )

@@ -1,0 +1,27 @@
+defaults:
+  - judo_dora_default
+
+task: leap_object_rotate
+optimizer: cem
+custom_tasks:
+  leap_object_rotate:
+    task: judo.tasks.leap_object_rotate.LeapObjectRotate
+    config: judo.tasks.leap_object_rotate.LeapObjectRotateConfig
+
+custom_optimizers:
+  cem:
+    optimizer: judo.optimizers.cem.CrossEntropyMethod
+    config: judo.optimizers.cem.CrossEntropyMethodConfig
+
+# example of how to use task-specific controller config overrides
+controller_config_overrides:
+  leap_object_rotate:
+    horizon: 1.0
+    spline_order: ZERO
+
+optimizer_config_overrides:
+  leap_object_rotate:
+    cem:
+      num_rollouts: 128
+
+simulation_backend: MUJOCO

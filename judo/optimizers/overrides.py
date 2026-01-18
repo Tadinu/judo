@@ -3,7 +3,7 @@ from judo.config import set_config_overrides
 from judo.optimizers.cem import CrossEntropyMethodConfig
 from judo.optimizers.mppi import MPPIConfig
 from judo.optimizers.ps import PredictiveSamplingConfig
-from judo.tasks import AllegroCubeRotateConfig, LeapFreeJointObjectPickConfig
+from judo.tasks import AllegroCubeRotateConfig, LeapFreeJointObjectPickConfig, LeapObjectRotateConfig
 
 
 def set_default_cylinder_push_overrides() -> None:
@@ -248,6 +248,44 @@ def set_default_leap_freejoint_object_pick_overrides() -> None:
     )
     set_config_overrides(
         "leap_freejoint_object_pick",
+        MPPIConfig,
+        {
+            "num_nodes": 4,
+            "num_rollouts": 128,
+            "use_noise_ramp": True,
+            "noise_ramp": 4.0,
+            "sigma": 0.2,
+            "temperature": 0.0025,
+        },
+    )
+
+
+def set_default_leap_object_rotate_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the leap cube task."""
+    set_config_overrides(
+        "leap_object_rotate",
+        PredictiveSamplingConfig,
+        {
+            "num_nodes": 4,
+            "num_rollouts": 128,
+            "use_noise_ramp": True,
+            "noise_ramp": 4.0,
+            "sigma": 0.2,
+        },
+    )
+    set_config_overrides(
+        "leap_object_rotate",
+        CrossEntropyMethodConfig,
+        {
+            "num_nodes": 4,
+            "num_rollouts": 32 if LeapObjectRotateConfig().is_backend_mujoco() else 32,
+            "num_elites": 5,
+            "use_noise_ramp": True,
+            "noise_ramp": 4.0,
+        },
+    )
+    set_config_overrides(
+        "leap_object_rotate",
         MPPIConfig,
         {
             "num_nodes": 4,

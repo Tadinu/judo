@@ -123,6 +123,12 @@ class Task(ABC, Generic[ConfigT]):
         # Fabrics: Collision-aware Batched IK computation backend
         self.fabrics_agent: Optional[FabricsAgent] = None
 
+        # Init ids (body, geom, sensors, etc.)
+        self.init_ids()
+
+    def init_ids(self):
+        pass
+
     def mjw_init_data(self, num_rollout_worlds: int) -> mjw.Data:
         self.mjw_data = mjw.put_data(self.mj_model, self.mj_data, nworld=num_rollout_worlds,
                                      njmax=250)

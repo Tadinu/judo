@@ -1,0 +1,84 @@
+<mujoco model="mug">
+  <!-- =================================================
+      Copyright 2019 Vikash Kumar
+      Model   :: Objects (MuJoCoV2.0)
+      Author  :: Vikash Kumar (vikashplus@gmail.com), Sudeep Dasari (sdasari@andrew.cmu.edu )
+      Details :: https://github.com/vikashplus/object_sim
+      License :: Under Apache License, Version 2.0 (the "License"); you may not use this file except in compliance with the License. You may obtain a copy of the License at http://www.apache.org/licenses/LICENSE-2.0 Unless required by applicable law or agreed to in writing, software distributed under the License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the License for the specific language governing permissions and limitations under the License.
+  ====================================================== -©vk©-->
+  <compiler angle="radian"/>
+  <asset>
+    <material name="MatObject" specular="0.75" shininess="0.1" reflectance="0.5" rgba="0.9 0.7 0.5 1"/>
+  </asset>
+
+  <default>
+    <default class="mesh">
+      <mesh scale="1. 1. 1."/>
+    </default>
+    <default class="mug">
+      <joint limited="false" margin="0.01" armature="0.001" damping="0" frictionloss="0.001"/>
+      <geom type="mesh" rgba=".93 .99 .97 1.0"/>
+      <site size="0.005 0 0" rgba="0.4 0.9 0.4 1"/>
+
+      <default class="mug_visual">
+        <geom contype="0" conaffinity="0"/>
+      </default>
+
+      <default class="mug_base">
+        <geom type="mesh" mass="0" density="1250" contype="1" conaffinity="1" friction="1 0.5 0.01" margin="0.0005"
+              condim="4" rgba="1 0 0 1" group="3"/>
+      </default>
+
+      <default class="mug_trunk">
+        <geom type="mesh" mass="0" density="1250" contype="1" conaffinity="1" friction="1 0.5 0.01" margin="0.0005"
+              condim="4" rgba="0 1 0 1" group="3"/>
+      </default>
+
+      <default class="mug_handle">
+        <geom type="mesh" mass="0" density="1250" contype="1" conaffinity="1" friction="1 0.5 0.01" margin="0.0005"
+              condim="4" rgba="1 1 0 1" group="3"/>
+      </default>
+
+    </default>
+  </default>
+
+  <asset>
+    <mesh name="mug" file="mug.stl" class="mesh"/>
+    <mesh name="contact0" file="contact0.stl" class="mesh"/>
+    <mesh name="contact1" file="contact1.stl" class="mesh"/>
+    <mesh name="contact2" file="contact2.stl" class="mesh"/>
+    <mesh name="contact3" file="contact3.stl" class="mesh"/>
+    <mesh name="contact4" file="contact4.stl" class="mesh"/>
+    <mesh name="contact5" file="contact5.stl" class="mesh"/>
+    <mesh name="contact6" file="contact6.stl" class="mesh"/>
+    <mesh name="contact7" file="contact7.stl" class="mesh"/>
+    <mesh name="contact8" file="contact8.stl" class="mesh"/>
+    <mesh name="contact9" file="contact9.stl" class="mesh"/>
+    <mesh name="contact10" file="contact10.stl" class="mesh"/>
+    <mesh name="contact11" file="contact11.stl" class="mesh"/>
+    <mesh name="contact12" file="contact12.stl" class="mesh"/>
+    <mesh name="contact13" file="contact13.stl" class="mesh"/>
+  </asset>
+  <worldbody>
+    <body name="mug" pos="0.1 0 0.5" quat="1 0 0 0" childclass="mug">
+      <freejoint name="mug_freejoint"/>
+      <geom name="mug" mesh="mug" rgba="0 0 0.7 1.0" class="mug_visual" mass=".0108"/>
+      <geom name="mug_trunk0" mesh="contact0" class="mug_trunk"/>
+      <geom name="mug_trunk1" mesh="contact1" class="mug_trunk"/>
+      <geom name="mug_trunk2" mesh="contact2" class="mug_trunk"/>
+      <geom name="mug_trunk3" mesh="contact3" class="mug_trunk"/>
+      <geom name="mug_trunk4" mesh="contact4" class="mug_trunk"/>
+      <geom name="mug_trunk5" mesh="contact7" class="mug_trunk"/>
+      <geom name="mug_base0" mesh="contact5" class="mug_base"/>
+      <geom name="mug_base1" mesh="contact6" class="mug_base"/>
+      <geom name="mug_base2" mesh="contact8" class="mug_base"/>
+      <geom name="mug_base3" mesh="contact9" class="mug_base"/>
+      <geom name="mug_handle0" mesh="contact10" class="mug_handle"/>
+      <geom name="mug_handle1" mesh="contact11" class="mug_handle"/>
+      <geom name="mug_handle2" mesh="contact12" class="mug_handle"/>
+      <geom name="mug_handle3" mesh="contact13" class="mug_handle"/>
+      <site name="mug_handle_loop_center" pos="0.03 0 0.01" size="0.01 0.01 0.01" rgba="1 0.9 0.4 1"/>
+      <site name="mug_handle_center" pos="0.05 0 0.01" size="0.01 0.01 0.01" rgba="1 0.9 1 1"/>
+    </body>
+  </worldbody>
+</mujoco>

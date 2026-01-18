@@ -10,6 +10,7 @@ from judo.tasks.fr3_pick import FR3Pick, FR3PickConfig
 from judo.tasks.leap_cube import LeapCube, LeapCubeConfig
 from judo.tasks.leap_cube_down import LeapCubeDown, LeapCubeDownConfig
 from judo.tasks.leap_freejoint_object_pick import LeapFreeJointObjectPick, LeapFreeJointObjectPickConfig
+from judo.tasks.leap_object_rotate import LeapObjectRotate, LeapObjectRotateConfig
 from judo.tasks.allegro_cube_rotate import AllegroCubeRotate, AllegroCubeRotateConfig
 from judo.tasks.iiwa7_allegro_pick import IIWA7AllegroPick, IIWA7AllegroPickConfig
 
@@ -23,6 +24,7 @@ _registered_tasks: Dict[str, Tuple[Type[Task], Type[TaskConfig]]] = {
     AllegroCubeRotate.config_t.task_name: (AllegroCubeRotate, AllegroCubeRotateConfig),
     IIWA7AllegroPick.config_t.task_name: (AllegroCubeRotate, AllegroCubeRotateConfig),
     LeapFreeJointObjectPick.config_t.task_name: (LeapFreeJointObjectPick, LeapFreeJointObjectPickConfig),
+    LeapObjectRotate.config_t.task_name: (LeapObjectRotate, LeapObjectRotateConfig),
 }
 
 
@@ -55,6 +57,8 @@ __all__ = [
     "LeapCubeDownConfig",
     "LeapFreeJointObjectPick",
     "LeapFreeJointObjectPickConfig",
+    "LeapObjectRotate",
+    "LeapObjectRotateConfig",
     "AllegroCubeRotate",
     "AllegroCubeRotateConfig",
 ]

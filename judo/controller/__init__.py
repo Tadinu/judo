@@ -10,7 +10,8 @@ from judo.controller.overrides import (
     set_default_leap_cube_down_overrides,
     set_default_leap_cube_overrides,
     set_default_allegro_cube_overrides,
-    set_default_leap_freejoint_object_pick_overrides
+    set_default_leap_freejoint_object_pick_overrides,
+    set_default_leap_object_rotate_overrides
 )
 from judo.utils.assets import download_and_extract_meshes
 
@@ -28,6 +29,7 @@ set_default_leap_cube_overrides()
 set_default_leap_cube_down_overrides()
 set_default_allegro_cube_overrides()
 set_default_leap_freejoint_object_pick_overrides()
+set_default_leap_object_rotate_overrides()
 
 __all__ = [
     "Controller",
