@@ -37,7 +37,7 @@
     <contact name="mug_contact_with_if_tip" geom1="mug_handle2" geom2="if_tip" data="found force"/>
     <contact name="mug_contact_with_mf_tip" geom1="mug_handle0" geom2="mf_tip" data="found force"/>
     <contact name="mug_contact_with_rf_tip" geom1="mug_handle1" geom2="rf_tip" data="found force"/>
-    <framepos name="mug_distance_to_grasp" objtype="site" objname="mug_handle_center" reftype="site"
+    <framepos name="mug_distance_to_grasp" objtype="site" objname="mug_center" reftype="site"
               refname="grasp_site"/>
     <framepos name="mug_distance_to_target" objtype="body" objname="mug" reftype="body" refname="target"/>
     <framequat name="mug_orientation" objtype="body" objname="mug"/>

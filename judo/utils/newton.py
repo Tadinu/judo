@@ -252,8 +252,8 @@ class NewtonBackend:
                 with wp.ScopedTimer("step", active=False):
                     self.step()
 
-            with wp.ScopedTimer("render", active=False):
-                self.render()
+                with wp.ScopedTimer("render", active=False):
+                    self.render()
 
         # Close viewer
         self.viewer.close()

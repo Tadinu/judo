@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import enum
 from dataclasses import dataclass, field
 from typing import Any, Optional, TYPE_CHECKING
-from enum import Enum
 
 import numpy as np
 
@@ -74,7 +72,9 @@ class LeapObjectRotate(LeapCube):
         self.obj_id: int = -1
         self.obj_qpos_ids: list[int]
         self.target_mocap_id: int = -1
-        self.obj_quat_distance_sensor_idx: int = -1
+        # distance sensors
+        self.obj_pos_distance_to_grasp_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_grasp")
+        self.obj_contact_with_palm_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_contact_with_palm")
 
     def init_ids(self):
         self.obj_id = mj.mj_name2id(self.mj_model, mj.mjtObj.mjOBJ_BODY, OBJ_NAME)
@@ -132,6 +132,13 @@ class LeapObjectRotate(LeapCube):
         """
         # rewards = super().reward(states, sensors, controls, system_metadata)
 
+        # Position costs
+        reaching_err = sensors[..., self.obj_pos_distance_to_grasp_sensor_idx:
+                                    self.obj_pos_distance_to_grasp_sensor_idx + 2]
+        squared_distance = np.square(reaching_err).sum(-1).mean(-1)
+        position_cost = 0.1 * squared_distance + 100 * np.maximum(squared_distance - 0.05 ** 2, 0.0)
+        # vertical_position_cost = 0.1 * np.abs(sensors[..., self.obj_pos_distance_to_grasp_sensor_idx + 2]).mean(-1)
+
         # Obj Rotating cost
         if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
             obj_orientation = states[..., self.obj_qpos_ids[3:7]]
@@ -142,7 +149,11 @@ class LeapObjectRotate(LeapCube):
             pass
         orientation_cost = 0.05 * np.square(np_quat_diff_so3(obj_orientation, self.goal_quat)).sum(-1).mean(-1)
 
-        total_reward = -orientation_cost
+        # Contact cost
+        contact_err = sensors[..., self.obj_contact_with_palm_sensor_idx]
+        contact_cost = 0.01 * contact_err.sum(-1).mean(-1)
+
+        total_reward = -(position_cost + orientation_cost + contact_cost)
         # print(total_reward.mean())
         return total_reward
 
@@ -150,7 +161,7 @@ class LeapObjectRotate(LeapCube):
         """Checks if the obj has dropped and resets if so."""
         obj_pose = self.mj_data.qpos[self.obj_qpos_ids]
         # print(obj_pose[2])
-        has_dropped = obj_pose[2] < 0.05
+        has_dropped = obj_pose[2] < 0.1
 
         # we reset here if the obj has dropped
         if has_dropped:

@@ -4,6 +4,9 @@ import numpy as np
 import torch
 from enum import Enum
 
+# warp
+import warp as wp
+
 # mujoco
 import mujoco as mj
 
@@ -22,6 +25,62 @@ from mjmanip.robot.leap_fabrics import LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \
     LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES
 
 
+@wp.func
+def wp_project_to_plane(p: wp.vec3, c: wp.vec3, n: wp.vec3) -> wp.vec3:
+    """Project point p onto the plane with point c and normal n."""
+    return p - wp.dot(p - c, n) * n
+
+
+@wp.kernel
+def wp_kernel_get_projection_onto_object_surface(points: wp.array(dtype=float, ndim=2),
+                                                 obj_mesh: wp.Mesh,
+                                                 obj_mesh_vert_normals: wp.array(dtype=float, ndim=1),
+                                                 obj_q: wp.array(dtype=float, ndim=1),
+                                                 out_projection_points: wp.array(dtype=float, ndim=2)):
+    tid = wp.tid()
+    # --------------------------------------------------------------------- #
+    #  Mesh query                                                           #
+    # --------------------------------------------------------------------- #
+    face_index = int(0)
+    face_u = float(0.0)
+    face_v = float(0.0)
+    sign = float(0.0)
+    max_dist = 1e8
+
+    obj_mesh_id = obj_mesh.id
+    point = points[tid]
+    point_vec = wp.vec3(point[0], point[1], point[2])
+    wp.mesh_query_point(
+        obj_mesh_id, point_vec, max_dist, sign, face_index, face_u, face_v
+    )
+
+    face_w = 1.0 - face_u - face_v
+
+    i0 = wp.mesh_get_index(obj_mesh_id, face_index * 3 + 0)
+    i1 = wp.mesh_get_index(obj_mesh_id, face_index * 3 + 1)
+    i2 = wp.mesh_get_index(obj_mesh_id, face_index * 3 + 2)
+
+    p0 = wp.mesh_get_point(obj_mesh_id, face_index * 3 + 0)
+    p1 = wp.mesh_get_point(obj_mesh_id, face_index * 3 + 1)
+    p2 = wp.mesh_get_point(obj_mesh_id, face_index * 3 + 2)
+
+    n0 = obj_mesh_vert_normals[i0]
+    n1 = obj_mesh_vert_normals[i1]
+    n2 = obj_mesh_vert_normals[i2]
+
+    # Barycentric interpolation
+    p = face_u * p0 + face_v * p1 + face_w * p2
+
+    c0 = wp_project_to_plane(p, p0, n0)
+    c1 = wp_project_to_plane(p, p1, n1)
+    c2 = wp_project_to_plane(p, p2, n2)
+    q = face_u * c0 + face_v * c1 + face_w * c2
+
+    alpha = 0.75
+    r = (1.0 - alpha) * p + alpha * q
+    out_projection_points[tid] = r + obj_q
+
+
 class FabricsMPCType(Enum):
     PCA_HAND_GRASP = enum.auto()
     FINGER_EE_SINGLE_TASK_SPACE = enum.auto()
@@ -29,7 +88,7 @@ class FabricsMPCType(Enum):
     FINGER_EE_MULTI_CIRCULAR_TASK_SPACES = enum.auto()
 
 
-FABRICS_MPC_TYPE = FabricsMPCType.FINGER_EE_MULTI_TASK_SPACES
+FABRICS_MPC_TYPE = None  # FabricsMPCType.FINGER_EE_MULTI_TASK_SPACES
 
 
 class FabricsAgent:
@@ -222,6 +281,37 @@ class FabricsAgent:
             return out_rollout_controls
 
         elif self.USE_FINGER_EE_MULTI_CIRCULAR_TASK_SPACES:
+            from mjmanip.utils import mj_get_geom_mesh_data
+            # TODO: TO MOVE THIS TO MPCAPP THEN ONLY PASS OBJ MESH NORMALS TO FabricsAgent
+            mug_geom_id = self.mj_model.geom("mug").id
+            mug_vertices, mug_faces, mug_vertex_normals = mj_get_geom_mesh_data(self.mj_model, mug_geom_id)
+
+            obj_mesh_verts = wp.array(
+                data=mug_vertices,
+                dtype=wp.vec3,
+                device="cuda",
+                requires_grad=True,
+            )
+            obj_mesh_inds = wp.array(
+                data=mug_faces,
+                dtype=int,
+                device="cuda",
+                requires_grad=True,
+            )
+            obj_mesh_vert_normals = wp.array(
+                data=mug_vertex_normals,
+                dtype=wp.vec3,
+                device="cuda",
+                requires_grad=True,
+            )
+            obj_mesh = wp.Mesh(points=obj_mesh_verts, indices=obj_mesh_inds)
+            obj_mesh.refit()
+
+            new_ee_projected_points = wp.zeros((num_rollouts, 3), dtype=float, device="cuda")
+            wp.launch(wp_kernel_get_projection_onto_object_surface(wp.array(new_ee_target_pose[..., :3], dtype=float),
+                                                                   obj_mesh, obj_mesh_vert_normals,
+                                                                   wp.array(cur_obj_poses[0], dtype=float),
+                                                                   new_ee_projected_points))
             return rollout_controls
         else:
             return rollout_controls
