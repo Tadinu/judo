@@ -13,6 +13,7 @@ from judo.tasks.leap_freejoint_object_pick import LeapFreeJointObjectPick, LeapF
 from judo.tasks.leap_object_rotate import LeapObjectRotate, LeapObjectRotateConfig
 from judo.tasks.allegro_cube_rotate import AllegroCubeRotate, AllegroCubeRotateConfig
 from judo.tasks.iiwa7_allegro_pick import IIWA7AllegroPick, IIWA7AllegroPickConfig
+from judo.tasks.panda_leap_pick import PandaLeapPick, PandaLeapPickConfig
 
 _registered_tasks: Dict[str, Tuple[Type[Task], Type[TaskConfig]]] = {
     CylinderPush.config_t.task_name: (CylinderPush, CylinderPushConfig),
@@ -22,7 +23,8 @@ _registered_tasks: Dict[str, Tuple[Type[Task], Type[TaskConfig]]] = {
     LeapCubeDown.config_t.task_name: (LeapCubeDown, LeapCubeDownConfig),
     CaltechLeapCube.config_t.task_name: (CaltechLeapCube, CaltechLeapCubeConfig),
     AllegroCubeRotate.config_t.task_name: (AllegroCubeRotate, AllegroCubeRotateConfig),
-    IIWA7AllegroPick.config_t.task_name: (AllegroCubeRotate, AllegroCubeRotateConfig),
+    IIWA7AllegroPick.config_t.task_name: (IIWA7AllegroPick, IIWA7AllegroPickConfig),
+    PandaLeapPick.config_t.task_name: (PandaLeapPick, PandaLeapPickConfig),
     LeapFreeJointObjectPick.config_t.task_name: (LeapFreeJointObjectPick, LeapFreeJointObjectPickConfig),
     LeapObjectRotate.config_t.task_name: (LeapObjectRotate, LeapObjectRotateConfig),
 }

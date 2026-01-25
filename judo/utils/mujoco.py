@@ -20,6 +20,8 @@ def mj_make_model_data_pairs(model: MjModel, num_pairs: int) -> list[tuple[MjMod
     models = [deepcopy(model) for _ in range(num_pairs)]
     datas = [MjData(m) for m in models]
     model_data_pairs = list(zip(models, datas, strict=True))
+    for model, data in model_data_pairs:
+        mj.mj_forward(model, data)
     return model_data_pairs
 
 

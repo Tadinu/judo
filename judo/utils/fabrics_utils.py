@@ -147,7 +147,8 @@ class FabricsAgent:
                                                                     device=MJMANIP_DEVICE) for
                                         finger_ee_name in list(self.fabrics_controller.finger_targets.keys())}
 
-    def hand_pca_to_q(self, rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
+    def hand_pca_to_q(self, model_data_pairs: list[tuple[mj.MjModel, mj.MjData]],
+                      rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
         num_rollouts, num_steps = rollout_controls.shape[:2]
         out_rollout_controls = np.zeros((num_rollouts, num_steps, self.mj_model.nu))
 
@@ -165,7 +166,8 @@ class FabricsAgent:
             out_rollout_controls[..., step, wrist_dofs_no:] = pca @ np.linalg.pinv(self.HAND_PCA_MATRIX.T)
         return out_rollout_controls
 
-    def fabrics_plan(self, rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
+    def fabrics_plan(self, model_data_pairs: list[tuple[mj.MjModel, mj.MjData]],
+                     rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
         # Prep
         self.sampled_target_traces.clear()
         if self.USE_FINGER_EE_MULTI_TASK_SPACES:

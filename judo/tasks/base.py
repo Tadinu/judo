@@ -78,7 +78,7 @@ class Task(ABC, Generic[ConfigT]):
 
         # MuJoCo
         is_mujoco_backend = (backend_type == BackendType.MUJOCO or backend_type == BackendType.MUJOCO_WARP)
-        self.mj_spec = mj.MjSpec.from_file(str(self.config.xml_path)) if is_mujoco_backend else None
+        self.mj_spec = self.mj_compose_spec() if is_mujoco_backend else None
         self.mj_model = self.mj_spec.compile() if is_mujoco_backend else None
         self.mj_data = mj.MjData(self.mj_model) if is_mujoco_backend else None
         self.mj_sim_model = mj.MjModel.from_xml_path(str(self.config.sim_xml_path)) if self.config.sim_xml_path \
@@ -125,6 +125,9 @@ class Task(ABC, Generic[ConfigT]):
 
         # Init ids (body, geom, sensors, etc.)
         self.init_ids()
+
+    def mj_compose_spec(self) -> Optional[mj.MjSpec]:
+        return mj.MjSpec.from_file(str(self.config.xml_path)) if self.config.xml_path else None
 
     def init_ids(self):
         pass

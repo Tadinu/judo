@@ -125,3 +125,35 @@ def set_default_leap_object_rotate_overrides() -> None:
             "action_normalizer": NormalizerType.MIN_MAX.name
         },
     )
+
+
+def set_default_iiwa7_allegro_pick_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the leap cube down task."""
+    from judo.utils.fabrics_utils import FabricsAgent
+    set_config_overrides(
+        "iiwa7_allegro_pick",
+        ControllerConfig,
+        {
+            "horizon": 1.0 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
+                              FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 1.0,
+            "spline_order": SplineType.CUBIC.name,
+            "max_num_traces": 1,
+            "action_normalizer": NormalizerType.MIN_MAX.name
+        },
+    )
+
+
+def set_default_panda_leap_pick_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the leap cube down task."""
+    from judo.utils.fabrics_utils import FabricsAgent
+    set_config_overrides(
+        "panda_leap_pick",
+        ControllerConfig,
+        {
+            "horizon": 1.0 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
+                              FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 1.0,
+            "spline_order": SplineType.CUBIC.name,
+            "max_num_traces": 1,
+            "action_normalizer": NormalizerType.MIN_MAX.name
+        },
+    )

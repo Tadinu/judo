@@ -1,12 +1,12 @@
 defaults:
   - judo_dora_default
 
-task: iiwa7_allegro_pick
+task: panda_leap_pick
 optimizer: cem
 custom_tasks:
   iiwa7_allegro_pick:
-    task: judo.tasks.iiwa7_allegro_pick.IIWA7AllegroPick
-    config: judo.tasks.iiwa7_allegro_pick.IIWA7AllegroPickConfig
+    task: judo.tasks.panda_leap_pick.PandaLeapPick
+    config: judo.tasks.panda_leap_pick.PandaLeapPick
 
 custom_optimizers:
   cem:

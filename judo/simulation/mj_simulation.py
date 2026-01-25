@@ -44,10 +44,11 @@ class MJSimulation(Simulation):
         if self.nominal_control_spline is not None and not self.paused:
             try:
                 nominal_ctrl = self.nominal_control_spline(self.task.mj_data.time)
-                if self.fabrics_agent:
-                    nominal_ctrl = self.fabrics_agent.fabrics_plan(nominal_ctrl[None, None, ...],
-                                                                   self.sim_state.data.copy()).squeeze()
-                self.task.mj_data.ctrl[:] = nominal_ctrl[:self.task.mj_sim_model.nu]
+                if self.task.map_controls:
+                    nominal_ctrl = self.task.map_controls(None, nominal_ctrl[None, None, ...],
+                                                          self.sim_state.data.copy()).squeeze()
+                if not np.isnan(nominal_ctrl).any():
+                    self.task.mj_data.ctrl[:self.task.mj_sim_model.nu] = nominal_ctrl[:self.task.mj_sim_model.nu]
                 self._full_step()
             except ValueError:
                 # we're switching tasks and the new task has a different number of actuators

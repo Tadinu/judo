@@ -196,8 +196,8 @@ class LeapFreeJointObjectPick(LeapCube):
         # Stage 3: Obj Grasping cost
         grasp_cost = 0.001 * np.sum(np.square(controls))
         if OBJ_NAME != "cube":
-            finger_contact_cost = 0.001 * np.sum(np.array([sensors[..., self.obj_contact_with_finger_tip_sensors[f]]
-                                                           for f in LeapMjx.FINGER_TIPS_NAMES]))
+            finger_contact_cost = 0.001 * np.sum(np.array([sensors[..., f] for _, f in
+                                                           self.obj_contact_with_finger_tip_sensors.items()]))
             grasp_cost -= finger_contact_cost
 
         # Stage 4: Obj Bringing-To-Goal cost

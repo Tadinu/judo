@@ -2,6 +2,7 @@ import time
 from typing import Callable, Optional
 from threading import Lock
 from omegaconf import DictConfig
+from loop_rate_limiters import RateLimiter
 
 import warp as wp
 import mujoco as mj
@@ -100,6 +101,7 @@ class MPCApp:
         main_model = self.sim.task.mj_sim_model
         main_data = self.sim.task.mj_data
         num_steps = int(self.sim.task.fabrics_agent.num_fabrics_steps / 3) if self.sim.task.fabrics_agent else 1
+        rate = RateLimiter(frequency=1 / main_model.opt.timestep, warn=False)
         with mj.viewer.launch_passive(model=main_model, data=main_data, show_left_ui=False,
                                       show_right_ui=False) as viewer:
             mj.mjv_defaultFreeCamera(main_model, viewer.cam)
@@ -112,6 +114,7 @@ class MPCApp:
                 self.sim.step()
                 viewer.sync()
                 self.step_cnt += 1
+                rate.sleep()
             viewer.close()
 
     def mj_visualize_traces(self, scene):

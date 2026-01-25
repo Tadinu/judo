@@ -326,7 +326,8 @@ class Controller:
             # Map algo's candidate controls to final ones that match model's configuration space.
             # Eg: Jacobian map to transform EE vel to joint vels, PCA map to transform PCA grasp values to finger joints
             if self.task.map_controls:
-                self.rollout_controls = self.task.map_controls(self.rollout_controls, self.mj_current_state)
+                self.rollout_controls = self.task.map_controls(self.mj_model_data_pairs, self.rollout_controls,
+                                                               self.mj_current_state)
 
             # Roll out dynamics with action sequences.
             if self.mj_model:

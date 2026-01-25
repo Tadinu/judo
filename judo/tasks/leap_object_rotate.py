@@ -13,7 +13,7 @@ from judo import MODEL_PATH
 from judo.gui import slider
 from judo.tasks.leap_cube import LeapCube, LeapCubeConfig
 from judo.utils.fabrics_utils import FabricsAgent
-from judo.utils.math_utils import np_quat_diff_so3, np_quat_diff
+from judo.utils.math_utils import np_quat_diff_so3
 from judo.utils.mujoco import mj_get_qpos_ids, mj_get_mocap_id
 
 if TYPE_CHECKING:
