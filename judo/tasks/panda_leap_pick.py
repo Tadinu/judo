@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from judo.simulation.base import Simulation
 
 OBJ_NAME = PandaLeap.OBJECT_NAMES[0]
-USE_EE_MPC = False
+USE_EE_MPC = True
 EE_DOFS_NO = 6
 
 
@@ -200,8 +200,13 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         out_rollout_controls[..., PandaLeap.ARM_DOFS_NO:] = rollout_controls[..., EE_DOFS_NO:]
 
         for rollout_idx in range(num_rollouts):
-            mj_data = model_data_pairs[rollout_idx][1] if model_data_pairs else self.mj_data
+            rl_pair = model_data_pairs[rollout_idx] if model_data_pairs else None
+            mj_model = rl_pair[0] if rl_pair else self.mj_model
+            mj_data = rl_pair[1] if rl_pair else self.mj_data
             for step_idx in range(num_steps):
+                # Update [mj_data], 1: do not recompute sensors and energy
+                mj.mj_forwardSkip(mj_model, mj_data, mj.mjtStage.mjSTAGE_NONE, 1)
+
                 # EE pose vel (6DOF in 3D)
                 ee_pose_ctrl = rollout_controls[rollout_idx, step_idx, :EE_DOFS_NO]
 
