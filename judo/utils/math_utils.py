@@ -207,8 +207,11 @@ def np_rotate_vec_quat(vec: np.ndarray, quat: np.ndarray) -> np.ndarray:
     return r
 
 
-def np_mul_pose(pos1: np.ndarray, quat1: np.ndarray, pos2: np.ndarray, quat2: np.ndarray) -> tuple[
-    np.ndarray, np.ndarray]:
+def np_mul_pose(pose1: np.ndarray, pose2: np.ndarray) -> np.ndarray:
+    pos1 = pose1[:3]
+    pos2 = pose2[:3]
+    quat1 = pose1[3:]
+    quat2 = pose2[3:]
     # quat_res = quat1*quat2
     quat_res = np_quat_mul(quat1, quat2)
     quat_res = np_normalize(quat_res)
@@ -216,4 +219,4 @@ def np_mul_pose(pos1: np.ndarray, quat1: np.ndarray, pos2: np.ndarray, quat2: np
     # pos_res = quat1*pos2 + pos1
     pos_res = np_rotate_vec_quat(pos2, quat1)
     pos_res += pos1
-    return pos_res, quat_res
+    return np.concatenate([pos_res, quat_res])

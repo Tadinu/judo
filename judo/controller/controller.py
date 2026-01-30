@@ -34,6 +34,9 @@ from judo.simulation.mj_simulation import MJSimulation
 from judo.simulation.nt_simulation import NTSimulation
 from judo.utils.newton import NewtonBackend
 
+# mjmanip
+from mjmanip.robot.arm_hand import ArmHandDiffIK
+
 
 class SplineType(enum.Enum):
     ZERO = enum.auto()

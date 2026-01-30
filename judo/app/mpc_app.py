@@ -120,9 +120,10 @@ class MPCApp:
     def mj_visualize_traces(self, scene):
         mj_clear_scene(scene)
         # Nominal fabrics agent (the sim one, not rollout)'s sampled EE targets
-        fabrics_traces = self.sim.fabrics_agent.sampled_target_traces if self.sim.fabrics_agent else None
-        if fabrics_traces:
-            mj_draw_spheres(scene, fabrics_traces, [0.01] * len(fabrics_traces))
+        traces = self.sim.fabrics_agent.optimal_target_traces if self.sim.fabrics_agent else (
+            self.sim.task.optimal_target_traces)
+        if traces:
+            mj_draw_spheres(scene, traces, [0.01] * len(traces))
         if hasattr(self.sim.task, "cur_phase"):
             mj_draw_text(scene, self.sim.task.cur_phase.name)
 

@@ -113,7 +113,7 @@ class FabricsAgent:
         self.num_fabrics_steps = 1 if self.USE_PCA_HAND_GRASP else num_fabrics_steps
         self.fabric_cfg = fabric_cfg
         self.init_fabrics(fabric_cfg)
-        self.sampled_target_traces: list[np.ndarray] = []
+        self.optimal_target_traces: list[np.ndarray] = []
         self.is_for_rollout = (num_rollout_worlds > 1)
 
     def init_fabrics(self, fabric_cfg: ArmHandPoseFabricConfig) -> None:
@@ -169,7 +169,7 @@ class FabricsAgent:
     def fabrics_plan(self, model_data_pairs: list[tuple[mj.MjModel, mj.MjData]],
                      rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
         # Prep
-        self.sampled_target_traces.clear()
+        self.optimal_target_traces.clear()
         if self.USE_FINGER_EE_MULTI_TASK_SPACES:
             for finger_ee_name, finger_target_pose in self.finger_target_poses.items():
                 finger_target_pose.copy_(torch.as_tensor(
@@ -222,15 +222,13 @@ class FabricsAgent:
                 ee_pose_ctrl = rl_ctrl[..., -6:]
                 ee_pose_delta = np.concatenate([ee_pose_ctrl[..., :3], np_euler_to_quat(ee_pose_ctrl[..., 3:])],
                                                axis=-1)
-                new_ee_target_pose[..., :3], new_ee_target_pose[..., 3:] = np_mul_pose(
-                    common_finger_ee_target[..., :3], common_finger_ee_target[..., 3:],
-                    ee_pose_delta[..., :3], ee_pose_delta[..., 3:])
+                new_ee_target_pose[..., :] = np_mul_pose(common_finger_ee_target[..., :], ee_pose_delta[..., :])
                 for finger_ee_name, finger_target_pose in self.finger_target_poses.items():
                     finger_target_pose.copy_(torch.from_numpy(new_ee_target_pose))
 
                 # Traces
                 if not self.is_for_rollout:
-                    self.sampled_target_traces.extend(new_ee_target_pose[..., :3].tolist())
+                    self.optimal_target_traces.extend(new_ee_target_pose[..., :3].tolist())
 
                 # Fabrics rollout
                 self.fabrics_controller.step(new_finger_targets=self.finger_target_poses,
@@ -253,8 +251,6 @@ class FabricsAgent:
                 finger_ee_name_keys = list(self.finger_target_poses.keys())
                 for finger_ee_name, finger_target_pose in self.finger_target_poses.items():
                     i = finger_ee_name_keys.index(finger_ee_name)
-                    finger_target_pos = finger_target_pose[..., :3].detach().cpu().numpy()
-                    finger_target_quat = finger_target_pose[..., 3:].detach().cpu().numpy()
 
                     # EE pose delta (6DOF in 3D)
                     ee_pose_ctrl = rl_ctrl[..., -(i + 1) * 6:-i * 6 if i > 0 else None]
@@ -262,14 +258,13 @@ class FabricsAgent:
                                                    axis=-1)
 
                     new_ee_target_pose = np.zeros_like(ee_pose_delta)
-                    new_ee_target_pose[..., :3], new_ee_target_pose[..., 3:] = np_mul_pose(
-                        finger_target_pos, finger_target_quat,
-                        ee_pose_delta[..., :3], ee_pose_delta[..., 3:])
+                    new_ee_target_pose[..., :] = np_mul_pose(finger_target_pose[..., :].detach().cpu().numpy(),
+                                                             ee_pose_delta[..., :])
                     finger_target_pose.copy_(torch.from_numpy(new_ee_target_pose).float())
 
                     # Traces
                     if not self.is_for_rollout:
-                        self.sampled_target_traces.extend(new_ee_target_pose[..., :3].tolist())
+                        self.optimal_target_traces.extend(new_ee_target_pose[..., :3].tolist())
 
                 # Fabrics rollout
                 self.fabrics_controller.step(new_finger_targets=self.finger_target_poses,

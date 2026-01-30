@@ -75,6 +75,7 @@ class Task(ABC, Generic[ConfigT]):
         self.config = self.config_t()
         backend_type = self.config.sim_backend_type()
         self.num_rollout_worlds = num_rollout_worlds
+        self.optimal_target_traces: list[np.ndarray] = []
 
         # MuJoCo
         is_mujoco_backend = (backend_type == BackendType.MUJOCO or backend_type == BackendType.MUJOCO_WARP)

@@ -7,6 +7,7 @@ import numpy as np
 import mujoco as mj
 
 # mjmanip
+from mjmanip.robot.arm_hand import ArmHandDiffIK
 from mjmanip.robot.panda_leap import PandaLeapEnv, PandaLeap, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
 from mjmanip.utils import mj_body_free_joint_name, mj_get_site_pose
 
@@ -66,13 +67,17 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         self.robot_env = None
         self.robot = None
         self.map_controls = self.map_ee_to_arm_controls if USE_EE_MPC else None
+        self.rollout_diff_iks = None
+        self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, PandaLeap, self.qpos_home)
+        self.diff_ik.DT = self.mj_model.opt.timestep
+        self.diff_ik.init()
 
     def init_ids(self):
-        self.obj_id = mj.mj_name2id(self.mj_model, mj.mjtObj.mjOBJ_BODY, OBJ_NAME)
+        self.obj_id = self.mj_model.body(OBJ_NAME).id
         self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
         self.target_mocap_id = mj_get_mocap_id(self.mj_model, PandaLeap.goal_name(OBJ_NAME))
-        self.grasp_site_id = mj.mj_name2id(self.mj_model, mj.mjtObj.mjOBJ_SITE, \
-                                           PandaLeap.hand_item_full_name(PandaLeap.GRASP_SITE_NAME))
+        self.grasp_site_name = PandaLeap.hand_item_full_name(PandaLeap.GRASP_SITE_NAME)
+        self.grasp_site_id = self.mj_model.site(self.grasp_site_name).id
 
         # distance sensors
         # NOTE: For rollout result analysis, these are only valid IF MuJoCo-C Rollout backend supports mocap_pos/quat
@@ -97,7 +102,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
                                       arm_xml=ARM_XML_PATH,
                                       hand_xml=HAND_XML_PATH)
         spec = self.robot_env.construct_main_spec(self.robot_env.meshdir, self.robot_env.texturedir)
-        spec.option.timestep = 0.005 if USE_EE_MPC else 0.005
+        spec.option.timestep = 0.005
         return spec
 
     @Task.nu.getter
@@ -129,7 +134,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         """Implements the ALLEGRO cube rotation tracking task reward."""
         # Stage 1: Obj Reaching cost - Ignore Z
         reaching_err = sensors[..., self.obj_pos_distance_to_grasp_sensor_idx:
-                                    self.obj_pos_distance_to_grasp_sensor_idx + 2]
+                                    self.obj_pos_distance_to_grasp_sensor_idx + 3]
         squared_distance = np.square(reaching_err).sum(-1).mean(-1)
         reaching_cost = 0.1 * squared_distance + 100 * np.maximum(squared_distance - self.reach_threshold ** 2, 0.0)
 
@@ -166,10 +171,10 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         """Resets the model to a default state with random goal."""
         if self.mj_model:
             """Resets the model to a default state with random goal."""
-            # self.mj_data.qpos[:] = self.qpos_home
-            # self.mj_data.qvel[:] = 0.0
-            # self.mj_data.ctrl[:] = self.config.reset_command
-            # self._update_goal()
+            self.mj_data.qpos[:] = self.qpos_home
+            self.mj_data.qvel[:] = 0.0
+            self.mj_data.ctrl[:] = self.config.reset_command
+            self._update_goal()
             mj.mj_forward(self.mj_model, self.mj_data)
         else:
             pass
@@ -192,52 +197,55 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
                                rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
         assert self.config.sim_backend_type() == BackendType.MUJOCO
         assert EE_DOFS_NO == 6
+        if not model_data_pairs:
+            self.optimal_target_traces.clear()
 
-        num_rollouts, num_steps = rollout_controls.shape[:2]
-        out_rollout_controls = np.zeros((num_rollouts, num_steps, self.mj_model.nu))
+        # DiffIK for each rollout
+        if self.rollout_diff_iks is None:
+            self.rollout_diff_iks = [ArmHandDiffIK(mj_model, mj_data, PandaLeap, self.qpos_home)
+                                     for mj_model, mj_data in model_data_pairs]
+            for diff_ik in self.rollout_diff_iks:
+                diff_ik.DT = self.mj_model.opt.timestep
+                diff_ik.init()
 
         # Rollouts from [current_state]
+        num_rollouts, num_steps = rollout_controls.shape[:2]
+        out_rollout_controls = np.zeros((num_rollouts, num_steps, self.mj_model.nu))
         out_rollout_controls[..., PandaLeap.ARM_DOFS_NO:] = rollout_controls[..., EE_DOFS_NO:]
 
         for rollout_idx in range(num_rollouts):
             rl_pair = model_data_pairs[rollout_idx] if model_data_pairs else None
             mj_model = rl_pair[0] if rl_pair else self.mj_model
             mj_data = rl_pair[1] if rl_pair else self.mj_data
+            diff_ik = self.rollout_diff_iks[rollout_idx] if model_data_pairs else self.diff_ik
+            obj = mj_data.body(OBJ_NAME)
             for step_idx in range(num_steps):
-                # Update [mj_data], 1: do not recompute sensors and energy
-                mj.mj_forwardSkip(mj_model, mj_data, mj.mjtStage.mjSTAGE_NONE, 1)
+                # Step [mj_data] kinematics only
+                if model_data_pairs:
+                    mj.mj_kinematics(mj_model, mj_data)
 
-                # EE pose vel (6DOF in 3D)
+                # EE pose delta ctrl (6DOF in 3D)
                 ee_pose_ctrl = rollout_controls[rollout_idx, step_idx, :EE_DOFS_NO]
 
-                # Traces
-                # if not self.is_for_rollout:
-                # self.sampled_target_traces.extend(new_ee_target_pose[..., :3].tolist())
-
                 # EE -> Arm control
-                q = self.mj_convert_ee_to_arm_hand_ctrl(mj_data, ee_pose_ctrl)
+                if False:
+                    q = ArmHandDiffIK.dls_ik(mj_model, mj_data, ee_pose_ctrl,
+                                             self.grasp_site_name, dt=diff_ik.DT)
+                else:
+                    ee_quat_ctrl = np.zeros(4)
+                    mj.mju_euler2Quat(ee_quat_ctrl, ee_pose_ctrl[3:], "XYZ")
+                    target_pose = np.zeros(7)
+                    grasp_site_pos, grasp_site_quat = mj_get_site_pose(mj_data, self.grasp_site_id)
+                    mj.mju_mulPose(target_pose[:3], target_pose[3:],
+                                   grasp_site_pos, grasp_site_quat,
+                                   ee_pose_ctrl[:3], ee_quat_ctrl)
+                    q = diff_ik.plan(target_ee_pose=target_pose, use_solver=True)
+                    if q is None:
+                        q = diff_ik.plan(target_ee_pose=target_pose, use_solver=False)
+                    # Traces
+                    if not model_data_pairs:
+                        self.optimal_target_traces.append(target_pose[:3])
 
                 # Save result q back to [rollout_controls]
                 out_rollout_controls[rollout_idx, step_idx, :PandaLeap.ARM_DOFS_NO] = q[:PandaLeap.ARM_DOFS_NO]
         return out_rollout_controls
-
-    def mj_convert_ee_to_arm_hand_ctrl(self, mj_data: mj.MjData, grasp_site_vel_ctrl: np.ndarray) -> np.ndarray:
-        if True:
-            # Jac of [self._grasp_site]
-            jac = np.zeros((6, self.mj_model.nv))
-            mj.mj_jacSite(self.mj_model, mj_data, jac[:3], jac[3:], self.grasp_site_id)
-
-            # damped least-squares solve: qvel = J^T (J J^T + λ^2 I)^-1 v
-            damp = 0.01  # λ
-            diag = (damp ** 2) * np.eye(6)
-            dq = jac.T @ np.linalg.solve(jac @ jac.T + diag, grasp_site_vel_ctrl)
-            q = mj_data.qpos.copy()
-            mj.mj_integratePos(self.mj_model, q, dq, self.mj_model.opt.timestep)
-            np.clip(q[:self.mj_model.nu], *self.mj_model.jnt_range[:self.mj_model.nu, ...].T,
-                    out=q[:self.mj_model.nu])
-            return q
-        else:
-            hand_base_pose = f(grasp_site_ctrl)
-            self.robot_env.diff_ik.last_solved_q = self.robot_env.diff_ik.solve(hand_base_pose)
-            q = self.robot_env.diff_ik.last_solved_q
-        return q

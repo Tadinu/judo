@@ -61,7 +61,7 @@ def mj_get_mocap_id(model: mj.MjModel, mocap_body_name: str) -> int:
     if False:
         return model.body(mocap_body_name).mocapid[0]
     else:
-        mocap_body_id = mj.mj_name2id(model, mj.mjtObj.mjOBJ_BODY, mocap_body_name)
+        mocap_body_id = model.body(mocap_body_name).id
         return model.body_mocapid[mocap_body_id] if mocap_body_id > -1 else -1
 
 
