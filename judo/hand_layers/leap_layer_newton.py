@@ -16,7 +16,7 @@ from judo.hand_layers.leap_layer import LeapHandLayer
 # mjmanip
 from mjmanip.mj_utils import IDENTITY_POSE, mj_get_geom_mesh_meta
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
-from mjmanip.pytorch3d_utils import mjw_geoms_to_pytorch3d_meshes
+from mjmanip.torch3d_utils import mjw_geoms_to_pytorch3d_meshes
 from mjmanip.newton.newton_backend import NewtonBackend
 from mjmanip.warp_utils import wp_transform_from_mj, wp_kernel_transform_mesh_points, wp_kernel_compute_vertex_normals
 from mjmanip.newton.newton_utils import (NewtonShapeMeta, nt_get_links_shapes_meta,

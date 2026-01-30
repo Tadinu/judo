@@ -394,10 +394,12 @@ def set_default_panda_leap_pick_overrides() -> None:
         CrossEntropyMethodConfig,
         {
             "num_nodes": 4,
-            "num_rollouts": 32,
-            "num_elites": 5,
+            "num_rollouts": 64,
+            "num_elites": 10,
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
+            "sigma_min": 0.01,
+            "sigma_max": 0.3,
         },
     )
     set_config_overrides(
@@ -432,10 +434,12 @@ def set_default_triple_pandas_rotate_overrides() -> None:
         CrossEntropyMethodConfig,
         {
             "num_nodes": 4,
-            "num_rollouts": 32,
+            "num_rollouts": 128,
             "num_elites": 5,
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
+            # "sigma_min": 0.01,
+            # "sigma_max": 0.3,
         },
     )
     set_config_overrides(

@@ -12,6 +12,9 @@ import mujoco as mj
 import newton
 import warp as wp
 
+# mjmanip
+from mjmanip.robot.allegro import Allegro
+
 # judo
 from judo import MODEL_PATH, BackendType
 from judo.gui import slider
@@ -31,8 +34,9 @@ if TYPE_CHECKING:
 class AllegroCubeRotateConfig(TaskConfig):
     """Reward configuration ALLEGRO cube rotation task."""
 
-    sim_backend: str = BackendType.NEWTON.name
+    sim_backend: str = BackendType.MUJOCO_WARP.name
     task_name: str = "allegro_cube"
+    robot_class: ArmHand = Allegro
     xml_path: Optional[Union[Path, str]] = LeapCubeConfig().xml_path  # CaltechLeapCubeConfig().xml_path
     sim_xml_path: Optional[Union[Path, str]] = LeapCubeConfig().sim_xml_path  # CaltechLeapCubeConfig().sim_xml_path
     usd_path: Optional[Union[Path, str]] = str(MODEL_PATH / "usd" / "allegro_left_hand_with_cube.usda")

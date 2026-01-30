@@ -7,9 +7,10 @@ import numpy as np
 
 # mujoco
 import mujoco as mj
+import torch
 
 # mjmanip
-from mjmanip import DEFAULT_SCENE_MJX_XML_PATH, DEFAULT_SCENE_XML_PATH
+from mjmanip import DEFAULT_SCENE_MJX_XML_PATH, DEFAULT_SCENE_XML_PATH, MJMANIP_DEVICE
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
 from mjmanip.mj_utils import (IDENTITY_POSE, IDENTITY_WXYZ, mj_body_free_joint_name, mj_data_site_pose,
                               mj_data_mocap_pose, mj_data_move_mocap, mj_spec_add_body)
@@ -36,7 +37,7 @@ PANDA_LEAP.HAND_XML_PATH = HAND_XML_PATH
 from judo import BackendType
 from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
-from judo.utils.math_utils import np_quat_diff_so3, np_euler_to_quat, np_mul_pose
+from judo.utils.math_utils import np_quat_diff_so3, np_euler_to_quat, np_mul_pose, torch_quat_diff_so3
 from judo.utils.mujoco import mj_get_qpos_ids, mj_get_dof_ids, mj_get_mocap_id
 from judo.tasks.leap_freejoint_object_pick import ObjectRelocatingPhase
 
@@ -72,7 +73,7 @@ class PandaLeapPickConfig(TaskConfig):
     """Reward configuration Panda-Leap obj picking task."""
 
     task_name: str = "panda_leap_pick"
-    sim_backend: str = BackendType.MUJOCO.name
+    sim_backend: str = BackendType.MUJOCO_WARP.name
     robot_class: ArmHand = PANDA_LEAP
     qpos_home: Optional[np.ndarray] = field(default_factory=
                                             lambda: PANDA_LEAP.ARM_HOME_QPOS +
@@ -97,6 +98,8 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
         self.goal_pos = self.config.goal_pos
         self.goal_quat = self.config.goal_quat
+        self.goal_pos_torch = torch.tensor(self.goal_pos, device=MJMANIP_DEVICE)
+        self.goal_quat_torch = torch.tensor(self.goal_quat, device=MJMANIP_DEVICE)
         self.qpos_home = self.config.qpos_home
         self.cur_phase_start_time: dict[ObjectRelocatingPhase, float] = {}
         self.last_phase = ObjectRelocatingPhase.REACHING_OBJ
@@ -312,7 +315,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         grasp_desired_cost = 0.0 if is_reaching_obj else \
             np.sum(np.square(self.desired_hand_qpos - states[..., self.hand_qpos_ids]))
 
-        grasp_cost = 0.001 * np.sum(np.square(controls)) + grasp_direction_cost + 100 * grasp_desired_cost
+        grasp_cost = 0.001 * np.sum(np.square(controls.cpu().numpy())) + grasp_direction_cost + 100 * grasp_desired_cost
         if True:
             arm_contact_cost = self.sensors_contact_cost(sensors, self.obj_contact_with_arm_sensors)
             finger_contact_cost = 10 * self.sensors_contact_cost(sensors, self.obj_contact_with_finger_palm_sensors)
@@ -332,6 +335,88 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             else:
                 obj_to_goal_distance = self.sensor_value(sensors, self.obj_pos_distance_to_goal_sensor_idx, 3)
             bring_cost = 50 * np.square(obj_to_goal_distance).sum(-1).mean(-1)
+        else:
+            bring_cost = 0.0
+
+        # Final reward
+        if is_reaching_obj:
+            return -reaching_cost - grasp_cost - grasp_direction_cost
+        else:
+            return - reaching_cost - orientation_cost - grasp_cost - obj_vel_cost - hand_vel_cost - bring_cost
+
+    def reward_torch(self,
+                     states: torch.Tensor,
+                     sensors: torch.Tensor,
+                     controls: torch.Tensor,
+                     system_metadata: Optional[dict[str, Any]] = None) -> torch.Tensor:
+        """Implements the ALLEGRO cube rotation tracking task reward."""
+        is_reaching_obj = self.cur_phase == ObjectRelocatingPhase.REACHING_OBJ
+
+        # Stage 1: Obj Reaching cost - Ignore Z
+        # Always avoid arm contact, to focus on hand-based grasping only
+        reaching_err = self.sensor_value(sensors, self.obj_pos_distance_to_grasp_sensor_idx, 3)
+        squared_distance = torch.square(reaching_err).sum(-1).mean(-1)
+        reaching_cost = squared_distance + 100 * torch.max(squared_distance - self.reach_threshold_squared,
+                                                           torch.zeros(1))
+
+        # Stage 2: Obj Rotating cost
+        obj_position = states[..., self.obj_qpos_ids[:3]]
+        if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
+            obj_orientation = states[..., self.obj_qpos_ids[3:7]]
+        else:
+            # NOTE: Cannot use mocap's related quat sensor here since MuJoCo-C Rollout does not yet support mocap_pos/quat
+            # obj_orientation_err = sensors[..., self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
+            # goal_err_quat = np.array([1.0, 0.0, 0.0, 0.0])
+            pass
+        orientation_cost = (0.05 * torch.square(torch_quat_diff_so3(obj_orientation, self.goal_quat_torch)).
+                            sum(-1).mean(-1))
+
+        # Stage 3: Obj Grasping cost
+        if OBJ_NAME == 'mug':
+            obj_grasp_site_pos = self.sensor_value(sensors, self.obj_grasp_site_pos_sensor_idx, 3)
+            obj_grasp_direction_site_pos = self.sensor_value(sensors, self.obj_grasp_direction_site_pos_sensor_idx, 3)
+            obj_grasp_direction = (obj_grasp_direction_site_pos - obj_grasp_site_pos) / torch.norm(
+                obj_grasp_direction_site_pos - obj_grasp_site_pos, dim=2)[..., np.newaxis]
+        else:
+            obj_grasp_site_pos = obj_position
+            obj_grasp_direction = self.desired_grasp_direction
+
+        grasp_site_pos = self.sensor_value(sensors, self.grasp_site_pos_sensor_idx, 3)
+        grasp_direction_site_pos = self.sensor_value(sensors, self.grasp_direction_site_pos_sensor_idx, 3)
+        grasp_direction = (grasp_direction_site_pos - grasp_site_pos) / torch.norm(
+            grasp_direction_site_pos - grasp_site_pos, dim=2)[..., np.newaxis]
+        grasp_obj_direction = (obj_grasp_site_pos - grasp_site_pos) / \
+                              torch.norm(obj_grasp_site_pos - grasp_site_pos, dim=2)[..., np.newaxis]
+        grasp_direction_cost = (
+            # Palm-aimed-toward-object direction
+                55 * torch.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1)
+                # Palm-face-down direction
+                + 10 * torch.square(grasp_direction - obj_grasp_direction).sum(-1).mean(-1)
+        )
+
+        grasp_desired_cost = 0.0 if is_reaching_obj else \
+            torch.sum(torch.square(self.desired_hand_qpos - states[..., self.hand_qpos_ids]))
+
+        grasp_cost = 0.001 * torch.sum(torch.square(controls)) + grasp_direction_cost + 100 * grasp_desired_cost
+        if True:
+            arm_contact_cost = self.sensors_contact_cost(sensors, self.obj_contact_with_arm_sensors)
+            finger_contact_cost = 10 * self.sensors_contact_cost(sensors, self.obj_contact_with_finger_palm_sensors)
+            grasp_cost += arm_contact_cost - finger_contact_cost
+
+        # Stage 4: Obj vel cost
+        obj_velocity = states[..., self.mj_model.nq + self.obj_dof_ids]
+        obj_vel_cost = 100 * torch.sum(torch.square(obj_velocity))
+        hand_velocity = states[..., self.mj_model.nq + self.hand_dof_ids]
+        hand_vel_cost = torch.sum(torch.square(hand_velocity))
+
+        # Stage 5: Obj Bringing-To-Goal cost
+        bring_enabled = True
+        if bring_enabled:
+            if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
+                obj_to_goal_distance = torch.square(obj_position - self.goal_pos_torch)
+            else:
+                obj_to_goal_distance = self.sensor_value(sensors, self.obj_pos_distance_to_goal_sensor_idx, 3)
+            bring_cost = 50 * torch.square(obj_to_goal_distance).sum(-1).mean(-1)
         else:
             bring_cost = 0.0
 

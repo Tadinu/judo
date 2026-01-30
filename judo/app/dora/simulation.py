@@ -75,5 +75,4 @@ class SimulationNode(DoraNode):
     def update_control(self, event: dict) -> None:
         """Event handler for processing controls received from controller node."""
         spline_data = from_arrow(event["value"], event["metadata"], SplineData)
-        control = spline_data.nominal_spline()
-        self.sim.update_nominal_control_spline(control)
+        self.sim.update_nominal_control_spline(spline_data.nominal_spline)

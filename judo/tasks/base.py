@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Generic, TypeVar, Optional, Callable, Union, TYPE_CHECKING
 
 import numpy as np
+import torch
 
 # MuJoCo
 import mujoco as mj
@@ -32,7 +33,7 @@ from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabr
 @dataclass
 class TaskConfig:
     """Base task configuration dataclass."""
-    sim_backend: str = BackendType.MUJOCO.name
+    sim_backend: str = BackendType.MUJOCO_WARP.name
     task_name: str = ""
     xml_path: Optional[Union[Path, str]] = None
     sim_xml_path: Optional[Union[Path, str]] = None
@@ -89,6 +90,8 @@ class Task(ABC, Generic[ConfigT]):
 
         # MuJoCo Warp
         self.mjw_model: mjw.Model = mjw.put_model(self.mj_model) if (backend_type == BackendType.MUJOCO_WARP) else None
+        if self.mjw_model:
+            self.mjw_model.opt.warn_overflow = 0
         self.mjw_data: mjw.Data = self.mjw_init_data(num_rollout_worlds) if self.mjw_model else None
 
         # MuJoCo state type
@@ -226,10 +229,10 @@ class Task(ABC, Generic[ConfigT]):
         else:
             self.nt_sim.sim_backend.sim_time = value
 
-    def sensors_contact_cost(self, sensors_data: np.ndarray, sensor_idxs: list[int]) -> float:
-        return np.sum(np.array([sensors_data[..., s] for s in sensor_idxs]))
+    def sensors_contact_cost(self, sensors_data: np.ndarray | torch.Tensor, sensor_idxs: list[int]) -> float:
+        return sensors_data[..., sensor_idxs].sum()
 
-    def sensor_value(self, sensors_data: np.ndarray, sensor_idx: int, sensor_dim: int) -> np.ndarray:
+    def sensor_value(self, sensors_data: np.ndarray, sensor_idx: int, sensor_dim: int) -> np.ndarray | torch.Tensor:
         return sensors_data[..., sensor_idx:sensor_idx + sensor_dim]
 
     @abstractmethod
@@ -253,11 +256,32 @@ class Task(ABC, Generic[ConfigT]):
             rewards: The reward for each rollout. Shape=(num_rollouts,).
         """
 
+    @abstractmethod
+    def reward_torch(self,
+                     states: torch.Tensor,
+                     sensors: torch.Tensor,
+                     controls: torch.Tensor,
+                     system_metadata: dict[str, Any] | None = None) -> torch.Tensor:
+        """Abstract reward function for task.
+
+        Args:
+            states: The rolled out states (after the initial condition). Shape=(num_rollouts, T, nq + nv).
+            sensors: The rolled out sensors readings. Shape=(num_rollouts, T, total_num_sensor_dims).
+            controls: The rolled out controls. Shape=(num_rollouts, T, nu).
+            config: The current task config (passed in from the top-level controller).
+            system_metadata: Any additional metadata from the system that is useful for computing the reward. For
+                example, in the cube rotation task, the system could pass in new goal cube orientations to the
+                controller here.
+
+        Returns:
+            rewards: The reward for each rollout. Shape=(num_rollouts,).
+        """
+
     def nt_reward(self,
                   states: list[newton.State],
                   contacts: list[newton.Contacts],
                   controls: list[newton.Control],
-                  system_metadata: dict[str, Any] | None = None) -> np.ndarray:
+                  system_metadata: dict[str, Any] | None = None) -> torch.Tensor:
         """Abstract Newton reward function for task.
 
         Args:
@@ -280,11 +304,11 @@ class Task(ABC, Generic[ConfigT]):
         return self.mj_model.nu if self.mj_model else self.nt_sim_model.joint_dof_count
 
     @property
-    def actuator_ctrlrange(self) -> np.ndarray:
+    def actuator_ctrlrange(self) -> torch.Tensor:
         if self.mj_model:
             """Mujoco actuator limits for this task."""
             limits = self.mj_model.actuator_ctrlrange
-            limited: np.ndarray = self.mj_model.actuator_ctrllimited.astype(bool)  # type: ignore
+            limited: torch.Tensor = self.mj_model.actuator_ctrllimited.astype(bool)  # type: ignore
             limits[~limited] = np.array([-np.inf, np.inf], dtype=limits.dtype)  # if not limited, set to inf
         else:
             assert self.nt_sim_model
@@ -293,7 +317,7 @@ class Task(ABC, Generic[ConfigT]):
             for i in range(self.nt_sim_model_builder.joint_dof_count):
                 limits.append([self.nt_sim_model_builder.joint_limit_lower[i],
                                self.nt_sim_model_builder.joint_limit_upper[i]])
-            limits = np.array(limits)
+            limits = torch.Tensor(limits)
 
         return limits  # type: ignore
 
@@ -352,12 +376,12 @@ class Task(ABC, Generic[ConfigT]):
         """
         return {}
 
-    def optimizer_warm_start(self) -> np.ndarray:
+    def optimizer_warm_start(self) -> torch.Tensor:
         """Returns a warm start for the optimizer.
 
         This is used to provide an initial guess for the optimizer when optimizing the task before any iterations.
         """
-        return np.zeros(self.nu)
+        return torch.zeros(self.nu)
 
     def get_sensor_start_index(self, sensor_name: str) -> int:
         """Returns the starting index of a sensor in the 'sensors' array given the sensor's name.

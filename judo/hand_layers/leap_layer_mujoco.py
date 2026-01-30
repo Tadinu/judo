@@ -24,7 +24,7 @@ from mjmanip.mj_utils import (IDENTITY_POSE, mj_step, mj_scene_draw_pointcloud, 
                               mj_data_geom_body, mj_data_site_pose)
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.warp_utils import wp_transform_from_mj, wp_kernel_transform_mesh_points, wp_kernel_compute_vertex_normals
-from mjmanip.pytorch3d_utils import p3d_transform_points, mjw_geoms_to_pytorch3d_meshes
+from mjmanip.torch3d_utils import p3d_transform_points, mjw_geoms_to_pytorch3d_meshes
 from mjmanip.control.fabrics.prod.kinematics import Kinematics as TorchWarpKinematics
 from mjmanip.control.fabrics.taskmaps.robot_frame_origins_taskmap import RobotKinematics as RobotTorchWarpKinematics
 
