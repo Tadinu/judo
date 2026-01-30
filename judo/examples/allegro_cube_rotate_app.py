@@ -6,21 +6,16 @@ from omegaconf import DictConfig
 
 from pathlib import Path
 from dataclasses import dataclass
-from judo.tasks.allegro_cube_rotate import AllegroCubeRotateConfig
-
-# judo
-from judo.app.mpc_app import MPCApp
 
 # warp
 import warp as wp
 
+# judo
+from judo.tasks.allegro_cube_rotate import AllegroCubeRotateConfig
+from judo.app.mpc_app import MPCApp
 
-@dataclass
-class AllegroCubeRotateConfig(AllegroCubeRotateConfig):
-    """Reward configuration ALLEGRO cube rotation task."""
-
-    w_pos: float = 100.0
-    w_rot: float = 0.1
+# mjmanip
+from mjmanip.robot.allegro import Allegro
 
 
 @wp.kernel
@@ -60,6 +55,7 @@ class AllegroCubeRotateApp(MPCApp):
         super().__init__(task_name=cfg.task_name,
                          optimizer_name=list(optimizer_registration_cfg.keys())[0],
                          sim_backend_type=cfg.sim_backend_type(),
+                         robot_class=cfg.robot_class,
                          wp_kernel_set_joint_targets=wp_kernel_set_allegro_joint_targets,
                          task_registration_cfg=task_registration_cfg,
                          optimizer_registration_cfg=optimizer_registration_cfg)

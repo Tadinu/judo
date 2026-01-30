@@ -6,6 +6,7 @@ from mujoco import mj_step
 from omegaconf import DictConfig
 
 import numpy as np
+import torch
 import mujoco as mj
 
 # judo
@@ -100,8 +101,9 @@ class MJSimulation(Simulation):
                 if self.task.map_controls:
                     nominal_ctrl = self.task.map_controls(None, nominal_ctrl[None, None, ...],
                                                           self.sim_state.data.copy()).squeeze()
-                if not np.isnan(nominal_ctrl).any():
-                    self.task.mj_data.ctrl[:self.task.mj_sim_model.nu] = nominal_ctrl[:self.task.mj_sim_model.nu]
+                if not torch.isnan(nominal_ctrl).any():
+                    self.task.mj_data.ctrl[:self.task.mj_sim_model.nu] = (
+                        nominal_ctrl[:self.task.mj_sim_model.nu].cpu().numpy())
             except ValueError:
                 # we're switching tasks and the new task has a different number of actuators
                 pass

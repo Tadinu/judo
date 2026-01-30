@@ -4,7 +4,7 @@ defaults:
 task: panda_leap_pick
 optimizer: cem
 custom_tasks:
-  iiwa7_allegro_pick:
+  panda_leap_pick:
     task: judo.tasks.panda_leap_pick.PandaLeapPick
     config: judo.tasks.panda_leap_pick.PandaLeapPick
 

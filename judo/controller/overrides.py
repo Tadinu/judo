@@ -1,8 +1,9 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 from judo.config import set_config_overrides
-from judo.controller.mpcontroller import SplineType, MPControllerConfig
+from judo.controller.mpcontroller import MPControllerConfig
 from judo.utils.normalization import NormalizerType
+from judo.utils.spline import SplineType
 
 
 def set_default_cylinder_push_overrides() -> None:
@@ -88,9 +89,10 @@ def set_default_allegro_cube_overrides() -> None:
         "allegro_cube",
         MPControllerConfig,
         {
-            "horizon": 1.0,
+            "horizon": 0.05,
             "spline_order": SplineType.CUBIC.name,
             "max_num_traces": 1,
+            "action_normalizer": NormalizerType.MIN_MAX.name
         }
     )
 
@@ -150,8 +152,8 @@ def set_default_panda_leap_pick_overrides() -> None:
         "panda_leap_pick",
         MPControllerConfig,
         {
-            "horizon": 1.0 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
-                              FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 0.5,
+            "horizon": 0.1 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
+                              FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 0.05,
             "spline_order": SplineType.CUBIC.name,
             "max_num_traces": 1,
             "action_normalizer": NormalizerType.MIN_MAX.name
@@ -166,7 +168,7 @@ def set_default_triple_pandas_rotate_overrides() -> None:
         "triple_pandas_rotate",
         MPControllerConfig,
         {
-            "horizon": 1.0,
+            "horizon": 0.05,
             "spline_order": SplineType.CUBIC.name,
             "max_num_traces": 1,
             "action_normalizer": NormalizerType.MIN_MAX.name

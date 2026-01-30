@@ -4,6 +4,7 @@ from typing import Any, Optional, Union, TYPE_CHECKING
 from pathlib import Path
 import re
 import numpy as np
+import torch
 
 # mujoco
 import mujoco as mj
@@ -12,13 +13,18 @@ import mujoco as mj
 import newton
 import warp as wp
 
+# mjmanip
+from mjmanip import MJMANIP_DEVICE
+from mjmanip.robot.arm_hand import ArmHand
+from mjmanip.robot.allegro import Allegro
+
 # judo
 from judo import MODEL_PATH, BackendType
 from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
 from judo.tasks.leap_cube import LeapCubeConfig
 from judo.tasks.caltech_leap_cube import CaltechLeapCubeConfig
-from judo.utils.math_utils import np_quat_diff, np_quat_diff_so3
+from judo.utils.math_utils import np_quat_diff, np_quat_diff_so3, torch_quat_diff_so3
 from judo.utils.warp import wp_pose_to_mj
 
 if TYPE_CHECKING:
@@ -31,8 +37,9 @@ if TYPE_CHECKING:
 class AllegroCubeRotateConfig(TaskConfig):
     """Reward configuration ALLEGRO cube rotation task."""
 
-    sim_backend: str = BackendType.NEWTON.name
+    sim_backend: str = BackendType.MUJOCO_WARP.name
     task_name: str = "allegro_cube"
+    robot_class: ArmHand = Allegro
     xml_path: Optional[Union[Path, str]] = LeapCubeConfig().xml_path  # CaltechLeapCubeConfig().xml_path
     sim_xml_path: Optional[Union[Path, str]] = LeapCubeConfig().sim_xml_path  # CaltechLeapCubeConfig().sim_xml_path
     usd_path: Optional[Union[Path, str]] = str(MODEL_PATH / "usd" / "allegro_left_hand_with_cube.usda")
@@ -93,6 +100,8 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
 
         goal_mocap_body_id = mj.mj_name2id(self.mj_sim_model, mj.mjtObj.mjOBJ_BODY, "target")
         self.goal_mocap_id = self.mj_sim_model.body_mocapid[goal_mocap_body_id] if goal_mocap_body_id > -1 else -1
+        self.goal_pos_torch = torch.as_tensor(self.config.goal_pos, device=MJMANIP_DEVICE).float()
+        self.goal_quat_torch = torch.as_tensor(self.config.goal_quat, device=MJMANIP_DEVICE).float()
         if self.nt_sim_model_builder:
             cube_names = ['cube', '/World/envs/env_0/object/DexCube']
             self.nt_cube_body_idx_offset = [self.nt_sim_model_builder.body_label.index(cube_name)
@@ -185,6 +194,30 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
         pos_costs = pos_costs.sum(-1).mean(-1)
         rot_costs = rot_costs.sum(-1).mean(-1)
         rewards = -(pos_costs + rot_costs)
+        return rewards
+
+    def reward_torch(self,
+                     states: torch.Tensor,
+                     sensors: torch.Tensor,
+                     controls: torch.Tensor,
+                     system_metadata: Optional[dict[str, Any]] = None) -> torch.Tensor:
+        """Implements the ALLEGRO cube rotation tracking task reward."""
+        if system_metadata is None:
+            system_metadata = {}
+
+        # weights
+        w_pos = self.config.w_pos
+        w_rot = self.config.w_rot
+
+        # "standard" tracking task
+        qo_pos_traj = states[..., :3]
+        qo_quat_traj = states[..., 3:7]
+        qo_pos_diff = qo_pos_traj - self.goal_pos_torch
+        qo_quat_diff = torch_quat_diff_so3(qo_quat_traj, self.goal_quat_torch)
+
+        pos_cost = w_pos * 0.5 * torch.square(qo_pos_diff).sum(-1).mean(-1)
+        rot_cost = w_rot * 0.5 * torch.square(qo_quat_diff).sum(-1).mean(-1)
+        rewards = -(pos_cost + rot_cost)
         return rewards
 
     def post_sim_step(self) -> None:

@@ -42,8 +42,8 @@ from judo.hand_layers.leap_layer import LeapAnchor
 # mjmanip
 from mjmanip.mj_utils import mj_data_geoms_world_transforms
 from mjmanip.trimesh_utils import mj_get_body_trimeshes, trimesh_sample_geoms_surface_torch
-from mjmanip.pytorch3d_utils import (p3d_transform_points, p3d_stable_angle_between_vectors,
-                                     mjw_geoms_to_pytorch3d_meshes, p3d_to_trimesh)
+from mjmanip.torch3d_utils import (p3d_transform_points, p3d_stable_angle_between_vectors,
+                                   mjw_geoms_to_pytorch3d_meshes, p3d_to_trimesh)
 from mjmanip.o3d_utils import o3d_vox_downsample
 
 

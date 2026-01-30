@@ -3,6 +3,7 @@ import numpy as np
 import mujoco as mj
 import mujoco_warp as mjw
 import warp as wp
+import torch
 
 
 class MJWarpBackend:
@@ -61,18 +62,19 @@ class MJWarpBackend:
     def rollout(self,
                 state: np.ndarray,
                 state_type: mj.mjtState,
-                controls: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+                controls: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         # Prepare [self.mjw_data]
-        mjw_state = wp.array(np.full((self.mjw_data.nworld, mj.mj_stateSize(self.mj_model, state_type)), state),
-                             dtype=float)
+        # NOTE: This incurs overhead on copying batched [state/CPU] -> [mjw_state/GPU]
+        mjw_state = wp.from_numpy(np.full((self.mjw_data.nworld, mj.mj_stateSize(self.mj_model, state_type)), state),
+                                  dtype=float)
         mjw.set_state(self.mjw_model, self.mjw_data, mjw_state, int(state_type))
 
         # shape = (num_rollouts/num_worlds, num_steps, nu)
         assert controls.shape == (self.mjw_data.nworld, self.rollout_timesteps, self.mjw_model.nu)
-        self.rollout_controls = [wp.array(controls[:, i, :].squeeze(), dtype=wp.float32, device=self.wp_device)
+        self.rollout_controls = [wp.from_torch(controls[:, i, :].squeeze().to(torch.float32))
                                  for i in range(self.rollout_timesteps)]
 
-        # rollout
+        # Rollout mjw
         for i in range(self.rollout_timesteps):
             self.mjw_data.ctrl.assign(self.rollout_controls[i])
             if self.graph:
@@ -81,6 +83,6 @@ class MJWarpBackend:
                 self._rollout_simulation()
             mjw.get_state(self.mjw_model, self.mjw_data, self.rollout_states[i], int(self.mj_state_type))
             self.rollout_sensors[i].assign(self.mjw_data.sensordata)
-        out_states = np.array([_.numpy() for _ in self.rollout_states]).transpose(1, 0, 2)
-        out_sensors = np.array([_.numpy() for _ in self.rollout_sensors]).transpose(1, 0, 2)
+        out_states = torch.stack([wp.to_torch(_) for _ in self.rollout_states]).transpose(1, 0)
+        out_sensors = torch.stack([wp.to_torch(_) for _ in self.rollout_sensors]).transpose(1, 0)
         return out_states, out_sensors

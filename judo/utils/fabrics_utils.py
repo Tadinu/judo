@@ -148,9 +148,9 @@ class FabricsAgent:
                                         finger_ee_name in list(self.fabrics_controller.finger_targets.keys())}
 
     def hand_pca_to_q(self, model_data_pairs: list[tuple[mj.MjModel, mj.MjData]],
-                      rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
+                      rollout_controls: torch.Tensor, current_state: np.ndarray) -> torch.Tensor:
         num_rollouts, num_steps = rollout_controls.shape[:2]
-        out_rollout_controls = np.zeros((num_rollouts, num_steps, self.mj_model.nu))
+        out_rollout_controls = torch.zeros((num_rollouts, num_steps, self.mj_model.nu), device=rollout_controls.device)
 
         # Wrist ctrls
         wrist_ctrls = rollout_controls[..., :-self.HAND_PCA_DIM]
@@ -163,11 +163,11 @@ class FabricsAgent:
             pca = rl_ctrl[..., -self.HAND_PCA_DIM:]
 
             # Save result q back to [rollout_controls]
-            out_rollout_controls[..., step, wrist_dofs_no:] = pca @ np.linalg.pinv(self.HAND_PCA_MATRIX.T)
+            out_rollout_controls[..., step, wrist_dofs_no:] = pca @ torch.pinverse(self.HAND_PCA_MATRIX.T)
         return out_rollout_controls
 
     def fabrics_plan(self, model_data_pairs: list[tuple[mj.MjModel, mj.MjData]],
-                     rollout_controls: np.ndarray, current_state: np.ndarray) -> np.ndarray:
+                     rollout_controls: torch.Tensor, current_state: np.ndarray) -> torch.Tensor:
         # Prep
         self.optimal_target_traces.clear()
         if self.USE_FINGER_EE_MULTI_TASK_SPACES:
@@ -237,8 +237,7 @@ class FabricsAgent:
                                              cur_obj_poses=cur_obj_poses)
 
                 # Save result q back to [rollout_controls]
-                out_rollout_controls[..., step, wrist_dofs_no:] = (
-                    self.fabrics_controller.q.clone().detach().cpu().numpy())
+                out_rollout_controls[..., step, wrist_dofs_no:] = self.fabrics_controller.q.clone()
             return out_rollout_controls
         elif self.USE_FINGER_EE_MULTI_TASK_SPACES:
             # Rollouts from [current_state]
@@ -273,8 +272,7 @@ class FabricsAgent:
                                              cur_obj_poses=cur_obj_poses)
 
                 # Save result q back to [rollout_controls]
-                out_rollout_controls[..., step, wrist_dofs_no:] = (
-                    self.fabrics_controller.q.clone().detach().cpu().numpy())
+                out_rollout_controls[..., step, wrist_dofs_no:] = self.fabrics_controller.q.clone()
             return out_rollout_controls
 
         elif self.USE_FINGER_EE_MULTI_CIRCULAR_TASK_SPACES:

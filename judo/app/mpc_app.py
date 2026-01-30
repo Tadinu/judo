@@ -27,7 +27,7 @@ from mjmanip.mj_utils import (mj_data_body_geoms, mj_model_joints_qids, mj_model
                               mj_data_move_mocap, mj_data_mocap_pose,
                               mj_data_geoms_world_transforms, mj_data_site_pose,
                               mj_scene_clear, mj_scene_draw_spheres, mj_scene_draw_arrow)
-from mjmanip.pytorch3d_utils import p3d_multiply_poses, p3d_pose_inverse
+from mjmanip.torch3d_utils import p3d_multiply_poses, p3d_pose_inverse
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
 from mjmanip.robot.arm_hand_fabrics import ArmHandWithFabricsEnv
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
@@ -70,6 +70,7 @@ class MPCApp:
         self.task_name = task_name
         self.step_cnt = 0
         self.robot_class: ArmHand = robot_class
+        self.sim_backend_type = sim_backend_type
         self.device = device
 
         # 1- Sim
@@ -129,7 +130,7 @@ class MPCApp:
                 self.lock = Lock()
 
             # MUJOCO-Specific controllers
-            if self.is_mujoco and robot_class:
+            if self.is_mujoco and robot_class and sim_backend_type == BackendType.MUJOCO:
                 OBJ_NAME = robot_class.OBJECT_NAMES[0]
                 # Arm controller
                 self.mj_spec = self.sim.task.mj_spec
@@ -212,10 +213,10 @@ class MPCApp:
 
                 # Hand-base/Fingers pose optimizer
                 set_seed(0)
-                self.opt_params = HandOptimizerParams(nbatches=1, distance_lower=0.05, distance_upper=0.15,
-                                                      jitter_strength=0.1,
-                                                      joint_limit_lower=-np.pi / 6,
-                                                      joint_limit_upper=np.pi / 6)
+                self.hand_opt_params = HandOptimizerParams(nbatches=1, distance_lower=0.05, distance_upper=0.15,
+                                                           jitter_strength=0.1,
+                                                           joint_limit_lower=-np.pi / 6,
+                                                           joint_limit_upper=np.pi / 6)
                 self.hand_base = self.mj_data.body(robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME))
 
                 # Grasp initialization for the optimization
@@ -236,7 +237,7 @@ class MPCApp:
                                               object_data=self.object_data,
                                               obstacles_data=[self.env_bodies_data] +
                                                              [self.obj_obstacle_data] if self.obj_obstacle_data else [],
-                                              opt_params=self.opt_params,
+                                              opt_params=self.hand_opt_params,
                                               apply_force_closure=True,
                                               to_mano_frame=False,
                                               device=self.device)
@@ -304,7 +305,8 @@ class MPCApp:
                     self.plan()
 
                 # Robot class specific GUI visualizing
-                self.robot_class.visualize(viewer=mj_viewer, data=self.mj_data)
+                if self.sim_backend_type == BackendType.MUJOCO:
+                    self.robot_class.visualize(viewer=mj_viewer, data=self.mj_data)
 
                 # Step
                 self.sim.step()
@@ -516,8 +518,7 @@ class MPCApp:
 
     def update_control(self, nominal_spline_data: SplineData) -> None:
         """Event handler for processing controls received from controller node."""
-        nominal_control = nominal_spline_data.spline()
-        self.sim.update_nominal_control_spline(nominal_control)
+        self.sim.update_nominal_control_spline(nominal_spline_data.spline)
 
     def update_task(self, task_name: str) -> None:
         """Updates the task type."""

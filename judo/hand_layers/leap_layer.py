@@ -15,7 +15,7 @@ from scipy.spatial import KDTree
 import point_cloud_utils as pcu
 import pytorch_kinematics as pk
 import pytorch_kinematics.transforms as tf
-from mjmanip.pytorch3d_utils import p3d_transform_points
+from mjmanip.torch3d_utils import p3d_transform_points
 
 import mujoco as mj
 import roma
