@@ -10,6 +10,7 @@ from omegaconf import DictConfig
 from judo.tasks import get_registered_tasks
 from judo.tasks.base import Task
 from judo.utils.fabrics_utils import FabricsAgent
+from judo.utils.interp1d_torch import Interp1dTorch
 from judo.app.utils import register_tasks_from_cfg
 
 if TYPE_CHECKING:
@@ -36,7 +37,7 @@ class Simulation(ABC):
         if task_registration_cfg is not None:
             register_tasks_from_cfg(task_registration_cfg)
 
-        self.nominal_control_spline: Optional[Callable] = None
+        self.nominal_control_spline: Optional[Interp1dTorch] = None
         self.paused = False
         self.controller: Optional[Controller] = None
         self.task: Task = self._create_task(init_task, num_rollout_worlds)
@@ -62,7 +63,7 @@ class Simulation(ABC):
         """Event handler for processing pause status updates."""
         self.paused = not self.paused
 
-    def update_nominal_control_spline(self, control_spline: Callable) -> None:
+    def update_nominal_control_spline(self, control_spline: Interp1dTorch) -> None:
         """Event handler for processing controls received from controller node."""
         self.nominal_control_spline = control_spline
 

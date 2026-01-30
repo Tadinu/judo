@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Generic, TypeVar, Optional
 
 import numpy as np
+import torch
 
 from judo.config import OverridableConfig
 from judo.gui import slider
@@ -54,7 +55,7 @@ class Optimizer(ABC, Generic[OptimizerConfigT]):
         """Get the noise ramp value."""
         return self.config.noise_ramp
 
-    def pre_optimization(self, old_times: np.ndarray, new_times: np.ndarray) -> None:
+    def pre_optimization(self, old_times: torch.Tensor, new_times: torch.Tensor) -> None:
         """An entrypoint to the optimizer before optimization.
 
         This is used to update optimizer parameters with new information.
@@ -73,7 +74,7 @@ class Optimizer(ABC, Generic[OptimizerConfigT]):
         return False
 
     @abstractmethod
-    def sample_control_knots(self, nominal_knots: np.ndarray) -> np.ndarray:
+    def sample_control_knots(self, nominal_knots: torch.Tensor) -> torch.Tensor:
         """Samples control knots given a nominal control input.
 
         Args:
@@ -84,7 +85,7 @@ class Optimizer(ABC, Generic[OptimizerConfigT]):
         """
 
     @abstractmethod
-    def update_nominal_knots(self, sampled_knots: np.ndarray, rewards: np.ndarray) -> np.ndarray:
+    def update_nominal_knots(self, sampled_knots: torch.Tensor, rewards: torch.Tensor) -> torch.Tensor:
         """Update the nominal control knots based on the sampled controls and rewards.
 
         Args:

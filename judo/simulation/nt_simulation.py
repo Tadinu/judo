@@ -79,7 +79,7 @@ class NTSimulation(Simulation):
                     # Update target controls with [control_spline(self.sim_time)]
                     self.sim_backend.joint_target_controls.assign(
                         wp.array(np.full((self.model_builder.num_worlds, self.model_builder.joint_dof_count),
-                                         self.nominal_control_spline(self.sim_backend.sim_time)),
+                                         self.nominal_control_spline.apply(self.sim_backend.sim_time)),
                                  dtype=wp.float32))
 
     @property

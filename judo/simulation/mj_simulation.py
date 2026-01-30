@@ -43,7 +43,7 @@ class MJSimulation(Simulation):
         """Step the simulation forward by one timestep."""
         if self.nominal_control_spline is not None and not self.paused:
             try:
-                nominal_ctrl = self.nominal_control_spline(self.task.mj_data.time)
+                nominal_ctrl = self.nominal_control_spline.apply(self.task.mj_data.time)
                 if self.task.map_controls:
                     nominal_ctrl = self.task.map_controls(None, nominal_ctrl[None, None, ...],
                                                           self.sim_state.data.copy()).squeeze()

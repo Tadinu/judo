@@ -181,8 +181,7 @@ class MPCApp:
 
     def update_control(self, nominal_spline_data: SplineData) -> None:
         """Event handler for processing controls received from controller node."""
-        nominal_control = nominal_spline_data.spline()
-        self.sim.update_nominal_control_spline(nominal_control)
+        self.sim.update_nominal_control_spline(nominal_spline_data.spline)
 
     def update_task(self, task_name: str) -> None:
         """Updates the task type."""

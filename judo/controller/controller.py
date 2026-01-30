@@ -4,11 +4,13 @@ import warnings
 from dataclasses import dataclass
 from typing import Any, Callable, Literal, Union, Optional
 import enum
+import math
 
 import newton
 import mujoco as mj
 import numpy as np
 import warp as wp
+import torch
 from omegaconf import DictConfig
 from scipy.interpolate import interp1d
 
@@ -29,6 +31,7 @@ from judo.utils.normalization import (
     make_normalizer,
     normalizer_registry,
 )
+from judo.utils.interp1d_torch import Interp1dTorch
 from judo.visualizers.utils import get_mj_trace_sensors
 from judo.simulation.mj_simulation import MJSimulation
 from judo.simulation.nt_simulation import NTSimulation
@@ -118,16 +121,16 @@ class Controller:
         # Shape:
         # + [MUJOCO]: (self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nq + self.mj_model.nv)
         # + [MUJOCO_WARP]: (self.optimizer_cfg.num_rollouts, self.num_timesteps, mj.mj_stateSize(self.mj_model, state_type))
-        self.mj_states: np.ndarray = None
-        self.mj_current_state: np.ndarray = None
+        self.mj_states: torch.Tensor = None
+        self.mj_current_state: torch.Tensor = None
 
         # - MJ Sensors
         # + [MUJOCO]: (self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nsensordata)
         # + [MUJOCO_WARP]: (self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mjw_rollout_backend.mjw_model.nsensordata)
-        self.mj_sensors: np.ndarray = None
+        self.mj_sensors: torch.Tensor = None
 
         # Controls
-        self.rollout_controls = np.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nu)) \
+        self.rollout_controls = torch.zeros((self.optimizer_cfg.num_rollouts, self.num_timesteps, self.mj_model.nu)) \
             if self.mj_model else None
 
         # Action (must be after rollout backend init)
@@ -137,7 +140,7 @@ class Controller:
         self.system_metadata = {}
 
         # Rewards
-        self.rewards = np.zeros((self.optimizer_cfg.num_rollouts,))
+        self.rewards = torch.zeros((self.optimizer_cfg.num_rollouts,))
         self.reset()
 
         # Traces
@@ -195,17 +198,17 @@ class Controller:
     def num_timesteps(self) -> int:
         """Helper function to recalculate the number of timesteps for simulation."""
         # return 50
-        return np.ceil(self.horizon / self.task.dt).astype(int)
+        return math.ceil(self.horizon / self.task.dt)
 
     @property
-    def rollout_times(self) -> np.ndarray:
+    def rollout_times(self) -> torch.Tensor:
         """Helper function to calculate the rollout times based on the horizon length."""
-        return self.task.dt * np.arange(self.num_timesteps)
+        return self.task.dt * torch.arange(self.num_timesteps)
 
     @property
-    def spline_timesteps(self) -> np.ndarray:
+    def spline_timesteps(self) -> torch.Tensor:
         """Helper function to create new timesteps for spline queries."""
-        return np.linspace(0, self.horizon, self.optimizer_cfg.num_nodes, endpoint=True)
+        return torch.linspace(0, self.horizon, self.optimizer_cfg.num_nodes)
 
     @property
     def optimizer_cfg(self) -> OptimizerConfig:
@@ -268,7 +271,7 @@ class Controller:
 
         # Adjust time + move policy forward.
         new_times = self.time + self.spline_timesteps
-        nominal_knots = self.nominal_spline(new_times)
+        nominal_knots = self.nominal_spline.apply(new_times)
         nominal_knots_normalized = self.action_normalizer.normalize(nominal_knots)
 
         # resizing any variables due to changes in the GUI
@@ -315,7 +318,7 @@ class Controller:
         while i < self.max_opt_iters and not self.optimizer.stop_cond():
             # sample controls and clamp to action bounds
             candidate_knots_normalized = self.optimizer.sample_control_knots(nominal_knots_normalized)
-            candidate_knots_normalized = np.clip(
+            candidate_knots_normalized = torch.clip(
                 candidate_knots_normalized,
                 self.action_normalizer.normalize(self.task.actuator_ctrlrange[:, 0]),
                 self.action_normalizer.normalize(self.task.actuator_ctrlrange[:, 1]),
@@ -361,7 +364,7 @@ class Controller:
                 # [self.rollout_controls] -> [self.nt_rollout_backend.rollout_model_ctrls' joint_target_pos]
                 for i in range(len(self.nt_rollout_backend.rollout_model_ctrls)):
                     control = self.nt_rollout_backend.rollout_model_ctrls[i]
-                    control.joint_target_pos = wp.array(np.hstack(self.rollout_controls[:, i, :].squeeze()),
+                    control.joint_target_pos = wp.array(torch.hstack(self.rollout_controls[:, i, :].squeeze()),
                                                         dtype=control.joint_target_pos.dtype,
                                                         device=control.joint_target_pos.device)
 
@@ -390,11 +393,11 @@ class Controller:
         self.update_optimal_spline(self.times, self.nominal_knots)
         self.update_traces()
 
-    def action(self, time: float) -> np.ndarray:
+    def action(self, time: float) -> torch.Tensor:
         """Current best action of policy."""
-        return self.nominal_spline(time)
+        return self.nominal_spline.apply(time)
 
-    def update_optimal_spline(self, times: np.ndarray, nominal_controls: np.ndarray) -> None:
+    def update_optimal_spline(self, times: torch.Tensor, nominal_controls: torch.Tensor) -> None:
         """Update the spline with new timesteps / controls."""
         self.nominal_spline = make_spline(times, nominal_controls, self.spline_order)
 
@@ -404,8 +407,8 @@ class Controller:
         if self.optimizer_cfg.num_nodes < 4 and self.spline_order == SplineType.CUBIC:
             warnings.warn("Cubic splines require at least 4 nodes. Setting num_nodes=4.", stacklevel=2)
             self.optimizer_cfg.num_nodes = 4
-        self.nominal_knots = np.tile(self.task.optimizer_warm_start(), (self.optimizer_cfg.num_nodes, 1))
-        self.candidate_knots = np.tile(self.nominal_knots, (self.optimizer_cfg.num_rollouts, 1, 1))
+        self.nominal_knots = torch.tile(self.task.optimizer_warm_start(), (self.optimizer_cfg.num_nodes, 1))
+        self.candidate_knots = torch.tile(self.nominal_knots, (self.optimizer_cfg.num_rollouts, 1, 1))
         self.times = self.task.time + self.spline_timesteps
         self.update_optimal_spline(self.times, self.nominal_knots)
 
@@ -423,11 +426,11 @@ class Controller:
             new_num_rollouts = min(self.max_num_traces, self.optimizer_cfg.num_rollouts)
             if self.num_trace_elites != new_num_rollouts:
                 self.num_trace_elites = new_num_rollouts
-            sensors = np.repeat(self.mj_sensors, 2, axis=1)
+            sensors = torch.repeat(self.mj_sensors, 2, axis=1)
 
             # Order the actions from best to worst so that the first `num_trace_sensors` x `num_nodes` traces
             # correspond to the best rollout and are using a special colors
-            elite_actions = np.argsort(self.rewards)[-self.num_trace_elites:][::-1]
+            elite_actions = torch.argsort(self.rewards)[-self.num_trace_elites:][::-1]
 
             total_traces_rollouts = int(self.num_trace_elites * self.num_trace_sensors * self.sensor_rollout_size)
             # Calculates list of the elite indicies
@@ -447,23 +450,18 @@ class Controller:
 
             # Each block of (i, self.sensor_rollout_size) needs to be interleaved together into a stack of
             # [block(i, ), block (i + 1, ), ..., block(i + n)]
-            elites = np.zeros((self.num_trace_sensors * self.num_trace_elites, self.sensor_rollout_size, 2, 3))
+            elites = torch.zeros((self.num_trace_sensors * self.num_trace_elites, self.sensor_rollout_size, 2, 3))
             for sensor in range(self.num_trace_sensors):
-                s1 = np.reshape(sensors[:, :, sensor * 3: (sensor + 1) * 3], separated_sensors_size)
+                s1 = torch.reshape(sensors[:, :, sensor * 3: (sensor + 1) * 3], separated_sensors_size)
                 elites[sensor:: self.num_trace_sensors] = s1
-            self.traces = np.reshape(elites, (total_traces_rollouts, 2, 3))
+            self.traces = torch.reshape(elites, (total_traces_rollouts, 2, 3))
 
-    def update_state(self, state: Union[MujocoState, np.ndarray, newton.State]) -> None:
+    def update_state(self, state: Union[MujocoState, newton.State]) -> None:
         """Updates the states."""
         if self.mjw_rollout_backend:
             assert isinstance(state, np.ndarray)
             assert len(state) == mj.mj_stateSize(self.mj_model, self.mj_state_type)
             self.mj_current_state = state
-        elif self.mj_model:
-            assert isinstance(state, MujocoState)
-            self.mj_current_state = state.data
-            self.time = state.time
-            self.system_metadata = state.sim_metadata
         else:
             # Write sim-backend's state -> rollout-backend's state
             assert isinstance(state, newton.State)
@@ -474,14 +472,16 @@ class Controller:
         action_normalizer_kwargs = {}
         match self.action_normalizer_type:
             case NormalizerType.MIN_MAX:
-                action_normalizer_kwargs["min"] = self.task.actuator_ctrlrange[:, 0]
-                action_normalizer_kwargs["max"] = self.task.actuator_ctrlrange[:, 1]
+                action_normalizer_kwargs["min"] = torch.as_tensor(self.task.actuator_ctrlrange[:, 0],
+                                                                  dtype=torch.float32)
+                action_normalizer_kwargs["max"] = torch.as_tensor(self.task.actuator_ctrlrange[:, 1],
+                                                                  dtype=torch.float32)
             case NormalizerType.RUNNING:
                 action_normalizer_kwargs["init_std"] = 1.0  # TODO(yunhai): make this configurable
         return make_normalizer(self.action_normalizer_type, self.nu, **action_normalizer_kwargs)
 
 
-def make_spline(times: np.ndarray, controls: np.ndarray, spline_order: SplineType) -> interp1d:
+def make_spline(times: torch.Tensor, controls: torch.Tensor, spline_order: SplineType) -> Interp1dTorch:
     """Helper function for creating spline objects.
 
     Args:
@@ -491,15 +491,10 @@ def make_spline(times: np.ndarray, controls: np.ndarray, spline_order: SplineTyp
         extrapolate: Whether to allow extrapolation queries. Default true (for re-initialization).
     """
     # fill values for "before" and "after" spline extrapolation.
-    fill_value = (controls[..., 0, :], controls[..., -1, :])
-    return interp1d(
-        times,
-        controls,
-        kind=spline_order.name.lower(),
-        axis=-2,
-        copy=False,
-        fill_value=fill_value,  # interp1d is incorrectly typed # type: ignore
-        bounds_error=False,
+    # fill_value = (controls[..., 0, :], controls[..., -1, :])
+    return Interp1dTorch(
+        x=times,
+        y=controls.view(-1, times.shape[-1]),
     )
 
 

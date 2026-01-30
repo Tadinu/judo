@@ -5,9 +5,11 @@ from enum import Enum, auto
 from typing import Any, Literal
 
 import numpy as np
+import torch
 from scipy.interpolate import interp1d
 
-import mujoco as mj
+# judo
+from judo.utils.interp1d_torch import Interp1dTorch
 
 
 class EventType(Enum):
@@ -55,27 +57,22 @@ KindType = Literal[
 class SplineData:
     """Struct for (possibly batched) spline data."""
 
-    t: np.ndarray
+    t: torch.Tensor
     """array of times for knot points, shape (T,)"""
-    x: np.ndarray
+    x: torch.Tensor
     """(possibly batched) array of values to interpolate, shape (..., T, m)."""
     kind: KindType = "zero"
     """Spline type to use for interpolation. Same as parameter for scipy.interpolate.interp1d."""
     extrapolate: bool = True
     """Flag for whether to allow extrapolation queries. Default true (for re-initialization)."""
 
-    def spline(self) -> interp1d:
+    @property
+    def spline(self) -> Interp1dTorch:
         """Helper function for creating spline objects."""
         # fill values for "before" and "after" spline extrapolation.
         fill_value = (self.x[..., 0, :], self.x[..., -1, :])
 
-        # TODO(pculbert): refactor to more modern spline utils (per scipy). https://docs.scipy.org/doc/scipy/tutorial/interpolate/1D.html#tutorial-interpolate-1dsection
-        return interp1d(
-            self.t,
-            self.x,
-            kind=self.kind,
-            axis=-2,
-            copy=False,
-            fill_value=fill_value,  # type: ignore
-            bounds_error=not self.extrapolate,
+        return Interp1dTorch(
+            x=self.t[..., None, None].squeeze(),
+            y=self.x[..., None, None].squeeze()
         )

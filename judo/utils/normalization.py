@@ -7,6 +7,7 @@ from typing import Literal, Union
 import enum
 
 import numpy as np
+import torch
 
 
 class NormalizerType(enum.Enum):
@@ -19,8 +20,8 @@ class NormalizerType(enum.Enum):
 class MinMaxNormalizerConfig:
     """Config for MinMaxNormalizer."""
 
-    min: np.ndarray
-    max: np.ndarray
+    min: torch.Tensor
+    max: torch.Tensor
     eps: float
 
 
@@ -54,7 +55,7 @@ class Normalizer(ABC):
         self.dim = dim
 
     @abstractmethod
-    def normalize(self, x: np.ndarray) -> np.ndarray:
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """Normalize the data.
 
         Args:
@@ -63,7 +64,7 @@ class Normalizer(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    def denormalize(self, x: np.ndarray) -> np.ndarray:
+    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
         """Denormalize the data.
 
         Args:
@@ -71,7 +72,7 @@ class Normalizer(ABC):
         """
         raise NotImplementedError
 
-    def update(self, x: np.ndarray) -> None:
+    def update(self, x: torch.Tensor) -> None:
         """Update the normalizer.
 
         Args:
@@ -87,11 +88,11 @@ class IdentityNormalizer(Normalizer):
         """Initialize the normalizer."""
         super().__init__(dim)
 
-    def normalize(self, x: np.ndarray) -> np.ndarray:
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """Return the data as is."""
         return x
 
-    def denormalize(self, x: np.ndarray) -> np.ndarray:
+    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
         """Return the data as is."""
         return x
 
@@ -99,7 +100,8 @@ class IdentityNormalizer(Normalizer):
 class MinMaxNormalizer(Normalizer):
     """Normalizer that uses min and max values to scale the data to the range [-1, 1]."""
 
-    def __init__(self, dim: int, min: np.ndarray, max: np.ndarray, eps: float = 1e-6) -> None:
+    def __init__(self, dim: int, min: torch.Tensor, max: torch.Tensor,
+                 eps: float = 1e-6) -> None:
         """Initialize the normalizer.
 
         Args:
@@ -114,9 +116,9 @@ class MinMaxNormalizer(Normalizer):
         self.eps = eps
 
         # Only normalize the dimensions that are not -inf or inf
-        self.norm_dims = np.where((self.min != -np.inf) & (self.max != np.inf))[0]
+        self.norm_dims = torch.where((self.min != -torch.inf) & (self.max != torch.inf))[0]
         if len(self.norm_dims) != dim:
-            excluded_dims = np.where((self.min == -np.inf) | (self.max == np.inf))[0]
+            excluded_dims = torch.where((self.min == -torch.inf) | (self.max == torch.inf))[0]
             warnings.warn(
                 f"MinMaxNormalizer: {len(excluded_dims)} action dimensions ({excluded_dims.tolist()}) have infinite range "
                 f"and will not be normalized. Please check your model description for proper ctrlrange. "
@@ -125,17 +127,17 @@ class MinMaxNormalizer(Normalizer):
                 stacklevel=2,
             )
 
-    def normalize(self, x: np.ndarray) -> np.ndarray:
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """Normalize the data."""
-        x_normalized = x.copy()
+        x_normalized = torch.clone(x)
         min_vals = self.min[self.norm_dims]
         max_vals = self.max[self.norm_dims]
         x_normalized[..., self.norm_dims] = 2 * (x[..., self.norm_dims] - min_vals) / (max_vals - min_vals) - 1
         return x_normalized
 
-    def denormalize(self, x: np.ndarray) -> np.ndarray:
+    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
         """Denormalize the data."""
-        x_denormalized = x.copy()
+        x_denormalized = torch.clone(x)
         min_vals = self.min[self.norm_dims]
         max_vals = self.max[self.norm_dims]
         x_denormalized[..., self.norm_dims] = (x[..., self.norm_dims] + 1) * (max_vals - min_vals) / 2 + min_vals
@@ -172,13 +174,13 @@ class RunningMeanStdNormalizer(Normalizer):
 
         # Running statistics
         self.count = 0
-        self.mean = np.zeros(dim)
-        self.std = np.ones(dim) * init_std
+        self.mean = torch.zeros(dim)
+        self.std = torch.ones(dim) * init_std
 
         # For Welford's online algorithm. M2: sum of squares of differences from the current mean
-        self.M2 = np.zeros(dim)
+        self.M2 = torch.zeros(dim)
 
-    def update(self, x: np.ndarray) -> None:
+    def update(self, x: torch.Tensor) -> None:
         """Update the running statistics.
 
         Args:
@@ -188,27 +190,27 @@ class RunningMeanStdNormalizer(Normalizer):
 
         batch_dims = x.shape[:-1]
         batch_axis = tuple(range(len(batch_dims)))
-        batch_size = np.prod(batch_dims)
+        batch_size = torch.prod(batch_dims)
         self.count += batch_size
 
         # Welford's online algorithm
         delta = x - self.mean
-        self.mean += np.sum(delta, axis=batch_axis) / self.count
+        self.mean += torch.sum(delta, dim=batch_axis) / self.count
         delta2 = x - self.mean
 
         # Update M2
-        self.M2 += np.sum(delta * delta2, axis=batch_axis)
-        self.M2 = np.maximum(self.M2, 0)
+        self.M2 += torch.sum(delta * delta2, dim=batch_axis)
+        self.M2 = torch.maximum(self.M2, 0)
 
         # Update std
-        self.std = np.sqrt(self.M2 / self.count)
-        self.std = np.clip(self.std, self.min_std, self.max_std)
+        self.std = torch.sqrt(self.M2 / self.count)
+        self.std = torch.clip(self.std, self.min_std, self.max_std)
 
-    def normalize(self, x: np.ndarray) -> np.ndarray:
+    def normalize(self, x: torch.Tensor) -> torch.Tensor:
         """Normalize the data."""
         return (x - self.mean) / (self.std + self.eps)
 
-    def denormalize(self, x: np.ndarray) -> np.ndarray:
+    def denormalize(self, x: torch.Tensor) -> torch.Tensor:
         """Denormalize the data."""
         return x * self.std + self.mean
 

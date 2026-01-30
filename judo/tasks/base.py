@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Generic, TypeVar, Optional, Callable, Union, TYPE_CHECKING
 
 import numpy as np
+import torch
 
 # MuJoCo
 import mujoco as mj
@@ -31,7 +32,7 @@ from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabr
 @dataclass
 class TaskConfig:
     """Base task configuration dataclass."""
-    sim_backend: str = BackendType.MUJOCO.name
+    sim_backend: str = BackendType.MUJOCO_WARP.name
     task_name: str = ""
     xml_path: Optional[Union[Path, str]] = None
     sim_xml_path: Optional[Union[Path, str]] = None
@@ -249,7 +250,7 @@ class Task(ABC, Generic[ConfigT]):
                   states: list[newton.State],
                   contacts: list[newton.Contacts],
                   controls: list[newton.Control],
-                  system_metadata: dict[str, Any] | None = None) -> np.ndarray:
+                  system_metadata: dict[str, Any] | None = None) -> torch.Tensor:
         """Abstract Newton reward function for task.
 
         Args:
@@ -272,11 +273,11 @@ class Task(ABC, Generic[ConfigT]):
         return self.mj_model.nu if self.mj_model else self.nt_sim_model.joint_dof_count
 
     @property
-    def actuator_ctrlrange(self) -> np.ndarray:
+    def actuator_ctrlrange(self) -> torch.Tensor:
         if self.mj_model:
             """Mujoco actuator limits for this task."""
             limits = self.mj_model.actuator_ctrlrange
-            limited: np.ndarray = self.mj_model.actuator_ctrllimited.astype(bool)  # type: ignore
+            limited: torch.Tensor = self.mj_model.actuator_ctrllimited.astype(bool)  # type: ignore
             limits[~limited] = np.array([-np.inf, np.inf], dtype=limits.dtype)  # if not limited, set to inf
         else:
             assert self.nt_sim_model
@@ -285,7 +286,7 @@ class Task(ABC, Generic[ConfigT]):
             for i in range(self.nt_sim_model_builder.joint_dof_count):
                 limits.append([self.nt_sim_model_builder.joint_limit_lower[i],
                                self.nt_sim_model_builder.joint_limit_upper[i]])
-            limits = np.array(limits)
+            limits = torch.Tensor(limits)
 
         return limits  # type: ignore
 
@@ -341,12 +342,12 @@ class Task(ABC, Generic[ConfigT]):
         """
         return {}
 
-    def optimizer_warm_start(self) -> np.ndarray:
+    def optimizer_warm_start(self) -> torch.Tensor:
         """Returns a warm start for the optimizer.
 
         This is used to provide an initial guess for the optimizer when optimizing the task before any iterations.
         """
-        return np.zeros(self.nu)
+        return torch.zeros(self.nu)
 
     def get_sensor_start_index(self, sensor_name: str) -> int:
         """Returns the starting index of a sensor in the 'sensors' array given the sensor's name.
