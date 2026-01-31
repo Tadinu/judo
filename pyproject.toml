@@ -30,6 +30,7 @@ classifiers = [
 
 dependencies = [
     "dora-utils",  # dora + qol utils for writing nodes
+    "xvfbwrapper",
     "mujoco",
     "numpy",
     "pillow",  # for displaying app logo

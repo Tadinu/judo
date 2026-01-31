@@ -20,7 +20,8 @@ from judo.app.utils import get_class_from_string
 
 # mjmanip
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
-from mjmanip.utils import mj_clear_scene, mj_draw_spheres, mj_draw_text
+
+RECORD_TIME = 300
 
 
 class MPCApp:
@@ -30,7 +31,8 @@ class MPCApp:
                  kernel_set_joint_targets: Optional[Callable] = None,
                  task_registration_cfg: Optional[DictConfig] = None,
                  optimizer_registration_cfg: Optional[DictConfig] = None,
-                 fabric_cfg: Optional[ArmHandPoseFabricConfig] = None) -> None:
+                 fabric_cfg: Optional[ArmHandPoseFabricConfig] = None,
+                 headless: bool = False) -> None:
         """Initialize the simulation node."""
         self.task_name = task_name
         self.step_cnt = 0
@@ -42,7 +44,9 @@ class MPCApp:
             case BackendType.MUJOCO | BackendType.MUJOCO_WARP:
                 self.sim = MJSimulation(init_task=task_name,
                                         num_rollout_worlds=num_rollouts,
-                                        task_registration_cfg=task_registration_cfg)
+                                        task_registration_cfg=task_registration_cfg,
+                                        headless=headless,
+                                        record_video=headless)
             case BackendType.NEWTON:
                 self.sim = NTSimulation(init_task=task_name,
                                         num_substeps=8,  # MPC
@@ -103,33 +107,31 @@ class MPCApp:
         num_steps = int(self.sim.task.fabrics_agent.num_fabrics_steps / 3) if self.sim.task.fabrics_agent else 1
         rate = RateLimiter(frequency=1 / main_model.opt.timestep, warn=False)
         with mj.viewer.launch_passive(model=main_model, data=main_data, show_left_ui=False,
-                                      show_right_ui=False) as viewer:
-            mj.mjv_defaultFreeCamera(main_model, viewer.cam)
-            while viewer.is_running():
+                                      show_right_ui=False) as mj_viewer:
+            self.sim.mj_viewer = mj_viewer
+            mj.mjv_defaultFreeCamera(main_model, mj_viewer.cam)
+            while mj_viewer.is_running():
                 mj.mj_camlight(main_model, main_data)
+
+                # Plan
                 if self.synchronous_controller and (self.step_cnt % num_steps == 0 if num_steps > 1 else True):
                     self.write_state_to_controller()
                     self.plan()
-                self.mj_visualize_traces(viewer.user_scn)
-                self.sim.step()
-                viewer.sync()
-                self.step_cnt += 1
-                rate.sleep()
-            viewer.close()
 
-    def mj_visualize_traces(self, scene):
-        mj_clear_scene(scene)
-        # Nominal fabrics agent (the sim one, not rollout)'s sampled EE targets
-        traces = self.sim.fabrics_agent.optimal_target_traces if self.sim.fabrics_agent else (
-            self.sim.task.optimal_target_traces)
-        if traces:
-            mj_draw_spheres(scene, traces, [0.01] * len(traces))
-        if hasattr(self.sim.task, "cur_phase"):
-            mj_draw_text(scene, self.sim.task.cur_phase.name)
+                # Step
+                self.sim.step()
+                if self.sim.headless:
+                    self.step_cnt += 1
+                    if self.step_cnt >= RECORD_TIME:
+                        break
+                rate.sleep()
+
+            # Close sim
+            self.sim.close()
 
     def nt_spin(self):
-        viewer = self.sim.sim_backend.viewer
-        while viewer.is_running():
+        nt_viewer = self.sim.sim_backend.viewer
+        while nt_viewer.is_running():
             with wp.ScopedTimer("step", active=False):
                 start_time = time.time()
                 if self.synchronous_controller:
@@ -146,10 +148,10 @@ class MPCApp:
             if dt_elapsed < dt_des:
                 time.sleep(dt_des - dt_elapsed)
             else:
-                print(f"Sim step {dt_elapsed:.3f} longer than desired step {dt_des:.3f}!")
+                print(f"Newton Sim step {dt_elapsed:.3f} longer than desired step {dt_des:.3f}!")
 
         # Close viewer
-        viewer.close()
+        nt_viewer.close()
 
     def controller_spin(self):
         """Spin logic for the controller node."""

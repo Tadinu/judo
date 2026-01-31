@@ -30,8 +30,10 @@ class Simulation(ABC):
             init_task: str,
             num_rollout_worlds: int = 1,
             task_registration_cfg: Optional[DictConfig] = None,
+            headless: bool = False
     ) -> None:
         """Initialize the simulation node."""
+        self.headless = headless
         # handling custom task registration
         if task_registration_cfg is not None:
             register_tasks_from_cfg(task_registration_cfg)
