@@ -22,12 +22,12 @@ if TYPE_CHECKING:
 # mjmanip
 from mjmanip import DEFAULT_SCENE_XML_PATH
 from mjmanip.robot.leap_mjx import LeapMjx
-from mjmanip.robot.leap_fabrics import LeapWithFabrics, LeapWithFabricsEnv, HAND_XML_PATH
+from mjmanip.robot.leap_fabrics import (LeapWithFabrics, LeapWithFabricsEnv, HAND_XML_PATH,
+                                        LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \
+                                        LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES)
 from mjmanip.utils import mj_get_joints_qids
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
-from mjmanip.robot.leap_fabrics import LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \
-    LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES
 
 OBJ_NAME = LeapWithFabrics.OBJECT_NAMES[0]
 
