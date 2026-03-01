@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*judo/optimizers/hand_optimizers/grasp_npy/*
 
 # C extensions
 *.so

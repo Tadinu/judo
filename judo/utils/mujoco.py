@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
-import time
 from typing import Sequence, Union
 from copy import deepcopy
 
+import trimesh
 import numpy as np
 
 # mujoco
@@ -41,14 +41,41 @@ def mj_qpos_width(jnt_type: Union[int, mj.mjtJoint]) -> int:
     return 0
 
 
+def mj_joint_dof_width(jnt_type: Union[int, mj.mjtJoint]) -> int:
+    """Get the dimensionality of the joint in qvel."""
+    if isinstance(jnt_type, mj.mjtJoint):
+        jnt_type = jnt_type.value
+    match jnt_type:
+        case mj.mjtJoint.mjJNT_FREE:
+            return 6  # translation + rotation
+        case mj.mjtJoint.mjJNT_BALL:
+            return 3  # rotation
+        case mj.mjtJoint.mjJNT_SLIDE:
+            return 1  # scalar
+        case mj.mjtJoint.mjJNT_HINGE:
+            return 1  # scalar
+    return 0
+
+
 def mj_get_qpos_ids(model: mj.MjModel, joint_names: Sequence[str]) -> np.ndarray:
     index_list: list[int] = []
     for jnt_name in joint_names:
-        jnt = model.joint(jnt_name).id
-        jnt_type = model.jnt_type[jnt]
-        qadr = model.jnt_qposadr[jnt]
+        jid = model.joint(jnt_name).id
+        jnt_type = model.jnt_type[jid]
+        qadr = model.jnt_qposadr[jid]
         qdim = mj_qpos_width(jnt_type)
         index_list.extend(range(qadr, qadr + qdim))
+    return np.array(index_list)
+
+
+def mj_get_dof_ids(model: mj.MjModel, joint_names: Sequence[str]) -> np.ndarray:
+    index_list: list[int] = []
+    for jnt_name in joint_names:
+        jid = model.joint(jnt_name).id
+        jnt_type = model.jnt_type[jid]
+        dof_adr = model.jnt_dofadr[jid]
+        dof_dim = mj_joint_dof_width(jnt_type)
+        index_list.extend(range(dof_adr, dof_adr + dof_dim))
     return np.array(index_list)
 
 

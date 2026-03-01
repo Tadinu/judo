@@ -7,8 +7,17 @@ import numpy as np
 import mujoco as mj
 
 # mjmanip
+from mjmanip import DEFAULT_SCENE_MJX_XML_PATH, DEFAULT_SCENE_XML_PATH
 from mjmanip.robot.arm_hand import ArmHandDiffIK
-from mjmanip.robot.panda_leap import PandaLeapEnv, PandaLeap, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
+# NOTE: LeapMjx hand is more robust than Leap, so use [panda_leap_mjx] for now!
+# from mjmanip.robot.panda_leap import PandaLeapEnv, PandaLeap, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
+from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
+
+if PandaLeapMjx:
+    PandaLeapMjx.NBATCHES = 1
+    PandaLeap = PandaLeapMjx
+if PandaLeapMjxEnv:
+    PandaLeapEnv = PandaLeapMjxEnv
 from mjmanip.utils import mj_body_free_joint_name, mj_get_site_pose
 
 # judo
@@ -16,7 +25,7 @@ from judo import BackendType
 from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
 from judo.utils.math_utils import np_quat_diff_so3, np_euler_to_quat, np_mul_pose
-from judo.utils.mujoco import mj_get_qpos_ids, mj_get_mocap_id
+from judo.utils.mujoco import mj_get_qpos_ids, mj_get_dof_ids, mj_get_mocap_id
 
 if TYPE_CHECKING:
     from judo.simulation.base import Simulation
@@ -75,6 +84,8 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
     def init_ids(self):
         self.obj_id = self.mj_model.body(OBJ_NAME).id
         self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
+        self.obj_dof_ids = mj_get_dof_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
+        self.hand_dof_ids = mj_get_dof_ids(self.mj_model, PandaLeap.hand_items_full_names(PandaLeap.HAND_JOINTS_NAMES))
         self.target_mocap_id = mj_get_mocap_id(self.mj_model, PandaLeap.goal_name(OBJ_NAME))
         self.grasp_site_name = PandaLeap.hand_item_full_name(PandaLeap.GRASP_SITE_NAME)
         self.grasp_site_id = self.mj_model.site(self.grasp_site_name).id
@@ -94,11 +105,6 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             f"{self.grasp_direction_site_name}_position")
 
         # contact sensors
-        self.obj_contact_with_finger_tip_sensors = {
-            finger_tip_geom: self.get_sensor_start_index(f"{OBJ_NAME}_contact_with_{finger_tip_geom}")
-            for finger_tip_geom in PandaLeap.hand_items_full_names(PandaLeap.FINGER_TIPS_GEOM_NAMES)
-        }
-
         self.obj_contact_with_finger_palm_sensors = {
             finger_palm_geom: self.get_sensor_start_index(f"{OBJ_NAME}_contact_with_{finger_palm_geom}")
             for finger_palm_geom in PandaLeap.hand_items_full_names(PandaLeap.FINGER_PALMS_GEOM_NAMES)
@@ -106,7 +112,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
 
         self.obj_contact_with_arm_sensors = {
             arm_geom: self.get_sensor_start_index(f"{OBJ_NAME}_contact_with_{arm_geom}")
-            for arm_geom in PandaLeap.ARM_BODIES_NAMES
+            for arm_geom in PandaLeap.ARM_GEOMS_NAMES
         }
 
         self.reach_threshold = 0.015
@@ -114,9 +120,10 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         self.last_obj_distance_to_goal = 0.
 
     def mj_compose_spec(self) -> Optional[mj.MjSpec]:
-        self.robot_env = PandaLeapEnv(world_scene_xml=ARM_SCENE_XML_PATH,
-                                      arm_xml=ARM_XML_PATH,
-                                      hand_xml=HAND_XML_PATH)
+        self.robot_env = PandaLeapEnv(
+            world_scene_xml=DEFAULT_SCENE_MJX_XML_PATH if PandaLeapMjxEnv else DEFAULT_SCENE_XML_PATH,
+            arm_xml=ARM_XML_PATH,
+            hand_xml=HAND_XML_PATH)
         spec = self.robot_env.construct_main_spec(self.robot_env.meshdir, self.robot_env.texturedir)
         spec.option.timestep = 0.005
         return spec
@@ -142,17 +149,28 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         else:
             return super().actuator_ctrlrange
 
+    def sensors_contact_cost(self, sensors_data: np.ndarray, sensor_idxs: dict[str, int]) -> float:
+        return np.sum(np.array([sensors_data[..., s] for _, s in sensor_idxs.items()]))
+
+    def sensor_value(self, sensors_data: np.ndarray, sensor_idx: int, sensor_dim: int) -> np.ndarray:
+        return sensors_data[..., sensor_idx:sensor_idx + sensor_dim]
+
     def reward(self,
                states: np.ndarray,
                sensors: np.ndarray,
                controls: np.ndarray,
                system_metadata: Optional[dict[str, Any]] = None) -> np.ndarray:
         """Implements the ALLEGRO cube rotation tracking task reward."""
+        cur_obj_position = self.mj_data.body(OBJ_NAME).xpos
+        cur_grasp_site_position = self.mj_data.site(self.grasp_site_name).xpos
+        cur_obj_grasp_site_distance_square = np.square(cur_obj_position - cur_grasp_site_position).sum()
+        is_cur_obj_within_grasp = cur_obj_grasp_site_distance_square < self.reach_threshold ** 2
+
         # Stage 1: Obj Reaching cost - Ignore Z
-        reaching_err = sensors[..., self.obj_pos_distance_to_grasp_sensor_idx:
-                                    self.obj_pos_distance_to_grasp_sensor_idx + 3]
+        # Always avoid arm contact, to focus on hand-based grasping only
+        reaching_err = self.sensor_value(sensors, self.obj_pos_distance_to_grasp_sensor_idx, 3)
         squared_distance = np.square(reaching_err).sum(-1).mean(-1)
-        reaching_cost = 0.1 * squared_distance + 100 * np.maximum(squared_distance - self.reach_threshold ** 2, 0.0)
+        reaching_cost = squared_distance + 100 * np.maximum(squared_distance - self.reach_threshold ** 2, 0.0)
 
         # Stage 2: Obj Rotating cost
         obj_position = states[..., self.obj_qpos_ids[:3]]
@@ -163,36 +181,43 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             # obj_orientation_err = sensors[..., self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
             # goal_err_quat = np.array([1.0, 0.0, 0.0, 0.0])
             pass
-        orientation_cost = 0.5 * np.square(np_quat_diff_so3(obj_orientation, self.goal_quat)).sum(-1).mean(-1)
+        orientation_cost = 1000 * np.square(np_quat_diff_so3(obj_orientation, self.goal_quat)).sum(-1).mean(-1)
 
         # Stage 3: Obj Grasping cost
-        grasp_site_pos = sensors[..., self.grasp_site_pos_sensor_idx:self.grasp_site_pos_sensor_idx + 3]
-        grasp_direction_site_pos = sensors[..., self.grasp_direction_site_pose_sensor_idx:
-                                                self.grasp_direction_site_pose_sensor_idx + 3]
+        grasp_site_pos = self.sensor_value(sensors, self.grasp_site_pos_sensor_idx, 3)
+        grasp_direction_site_pos = self.sensor_value(sensors, self.grasp_direction_site_pose_sensor_idx, 3)
         grasp_direction = (grasp_direction_site_pos - grasp_site_pos) / np.linalg.norm(
             grasp_direction_site_pos - grasp_site_pos, axis=2)[..., np.newaxis]
         grasp_obj_direction = (obj_position - grasp_site_pos) / np.linalg.norm(obj_position - grasp_site_pos,
                                                                                axis=2)[..., np.newaxis]
         grasp_direction_cost = 10 * np.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1)
         grasp_cost = 0.001 * np.sum(np.square(controls)) + grasp_direction_cost
-        if False:
-            finger_contact_cost = 0.01 * np.sum(np.array([sensors[..., f] for _, f in
-                                                          self.obj_contact_with_finger_palm_sensors.items()]))
-            arm_contact_cost = 0.05 * np.sum(np.array([sensors[..., f] for _, f in
-                                                       self.obj_contact_with_arm_sensors.items()]))
+        if True:
+            arm_contact_cost = self.sensors_contact_cost(sensors, self.obj_contact_with_arm_sensors)
+            finger_contact_cost = 100 * self.sensors_contact_cost(sensors, self.obj_contact_with_finger_palm_sensors)
             grasp_cost += arm_contact_cost - finger_contact_cost
 
-        # Stage 4: Obj Bringing-To-Goal cost
+        # Stage 4: Obj vel cost
+        obj_velocity = states[..., self.mj_model.nq + self.obj_dof_ids]
+        obj_vel_cost = 100 * np.sum(np.square(obj_velocity))
+        hand_velocity = states[..., self.mj_model.nq + self.hand_dof_ids]
+        hand_vel_cost = np.sum(np.square(hand_velocity))
+
+        # Stage 5: Obj Bringing-To-Goal cost
         if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
-            obj_to_goal_distance = np.square(states[..., self.obj_qpos_ids[:3]] - self.goal_pos)
+            obj_to_goal_distance = np.square(obj_position - self.goal_pos)
         else:
-            obj_to_goal_distance = sensors[..., self.obj_pos_distance_to_goal_sensor_idx:
-                                                self.obj_pos_distance_to_goal_sensor_idx + 3]
+            obj_to_goal_distance = self.sensor_value(sensors, self.obj_pos_distance_to_goal_sensor_idx, 3)
         bring_cost = 50 * np.square(obj_to_goal_distance).sum(-1).mean(-1)
 
-        total_reward = - (reaching_cost + orientation_cost + grasp_cost + bring_cost)
-        # print(total_reward.mean())
-        return total_reward
+        # Final reward
+        if is_cur_obj_within_grasp:
+            print(arm_contact_cost, finger_contact_cost)
+            total_reward = - (reaching_cost + orientation_cost + grasp_cost + obj_vel_cost + hand_vel_cost + bring_cost)
+            # print(total_reward.mean())
+            return total_reward
+        else:
+            return -reaching_cost - grasp_cost - grasp_direction_cost
 
     def reset(self) -> None:
         """Resets the model to a default state with random goal."""

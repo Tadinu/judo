@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
+from typing import Optional
 from dataclasses import dataclass
 
 import numpy as np
@@ -21,9 +22,9 @@ class MPPIConfig(OptimizerConfig):
 class MPPI(Optimizer[MPPIConfig]):
     """The MPPI optimizer."""
 
-    def __init__(self, config: MPPIConfig, nu: int) -> None:
+    def __init__(self, config: MPPIConfig, nu: int, override_task_name: Optional[str] = None) -> None:
         """Initialize the MPPI optimizer."""
-        super().__init__(config, nu)
+        super().__init__(config, nu, override_task_name)
 
     @property
     def sigma(self) -> float:

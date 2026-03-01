@@ -39,6 +39,7 @@ dependencies = [
     "rich",  # for displaying tables in benchmarking
     "scipy",
     "viser>=1.0.0",
+    "pytorch-kinematics @ git+https://github.com/Tadinu/pytorch_kinematics.git@dev_mjcf_master"
 ]
 
 [project.urls]

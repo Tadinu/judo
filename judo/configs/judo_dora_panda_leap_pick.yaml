@@ -12,6 +12,9 @@ custom_optimizers:
   cem:
     optimizer: judo.optimizers.cem.CrossEntropyMethod
     config: judo.optimizers.cem.CrossEntropyMethodConfig
+    #mppi:
+    #optimizer: judo.optimizers.mppi.MPPI
+    #config: judo.optimizers.mppi.MPPIConfig
 
 # example of how to use task-specific controller config overrides
 controller_config_overrides:
