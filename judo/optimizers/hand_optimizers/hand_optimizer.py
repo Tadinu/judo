@@ -24,10 +24,19 @@ from tqdm import tqdm
 from judo.optimizers.hand_optimizers.object_utils import ObjectData
 from judo.optimizers.hand_optimizers.loss_utils import point2point_signed
 from judo.optimizers.hand_optimizers.rot6d import robust_compute_rotation_matrix_from_ortho6d
-from judo.hand_layers.leap_layer_mujoco import MJLeapHandLayer, MJLeapAnchor
+
+USE_MUJOCO = False
+USE_MJ_CPU = True  # NOTE: GPU MJW Mesh fetch is not correct yet!
+if USE_MUJOCO:
+    from judo.hand_layers.leap_layer_mujoco import MJLeapHandLayer as LeapHandLayer
+else:
+    from judo.hand_layers.leap_layer import LeapHandLayer
+from judo.hand_layers.leap_layer import LeapAnchor
 
 # mjmanip
 from mjmanip.trimesh_utils import mj_geoms_to_trimeshes
+from mjmanip.pytorch3d_utils import mjw_geoms_to_pytorch3d_meshes, p3d_to_trimesh
+from mjmanip.o3d_utils import o3d_vox_downsample
 
 
 # roma quat [x, y, z, w]
@@ -87,6 +96,8 @@ class HandOptimizer(torch.nn.Module):
         # Hand data
         self.hand_params = hand_params
         self.hand_model_name = hand_params.hand_model_name
+        self.hand_verts: np.ndarray = None
+        self.hand_vert_normals: np.ndarray = None
         self._init_hand_layer(to_mano_frame)
         self.use_mano_frame = self.hand_layer.to_mano_frame
         if hand_params.joint_angles is None:
@@ -106,12 +117,15 @@ class HandOptimizer(torch.nn.Module):
 
     def _init_hand_layer(self, to_mano_frame=True):
         if self.hand_model_name == 'leap_hand':
-            self.hand_layer = MJLeapHandLayer(
-                hand_model_desc=self.hand_params.xml_path if self.hand_params.xml_path else self.hand_params.urdf_path,
-                to_mano_frame=to_mano_frame, device=self.device)
-            self.hand_anchor_layer = MJLeapAnchor()
-            # custom hand layer should be added here
-            assert NotImplementedError
+            hand_model_desc = self.hand_params.xml_path or self.hand_params.urdf_path
+            if USE_MUJOCO:
+                self.hand_layer = LeapHandLayer(
+                    hand_model_desc=hand_model_desc,
+                    to_mano_frame=to_mano_frame, device=self.device)
+            else:
+                self.hand_layer = LeapHandLayer(hand_model_desc=hand_model_desc, to_mano_frame=to_mano_frame,
+                                                device=self.device)
+            self.hand_anchor_layer = LeapAnchor()
 
     def _init_hand(self, hand_params: HandParams):
         assert self.batches_num == hand_params.joint_angles.shape[0]
@@ -545,25 +559,51 @@ class HandOptimizer(torch.nn.Module):
         wrist_pose[:, :3, 3] = self.wrist_pos
         joint_angles = self.decode_joint_angles()
 
-        wrist_quat = torch.nn.functional.normalize(self.wrist_rot) if self.use_quat \
-            else roma.rotmat_to_unitquat(robust_compute_rotation_matrix_from_ortho6d(self.wrist_rot))
+        if USE_MUJOCO:
+            wrist_quat = torch.nn.functional.normalize(self.wrist_rot) if self.use_quat \
+                else roma.rotmat_to_unitquat(robust_compute_rotation_matrix_from_ortho6d(self.wrist_rot))
+            if USE_MJ_CPU:
+                cur_hand_trimeshes = mj_geoms_to_trimeshes(self.hand_layer.mj_model, self.hand_layer.mj_data,
+                                                           body_names=self.hand_layer.hand_body_names,
+                                                           hand_base_pose=np.concat(
+                                                               [self.wrist_pos.squeeze().cpu().detach().numpy(),
+                                                                wrist_quat.squeeze().cpu().detach().numpy()]),
+                                                           hand_qpos=joint_angles.cpu().detach().numpy(),
+                                                           is_collision=self.hand_layer.use_collision_mesh,
+                                                           body_trimeshes=self.hand_layer.ori_hand_meshes)
 
-        cur_hand_meshes = mj_geoms_to_trimeshes(self.hand_layer.mj_model, self.hand_layer.mj_data,
-                                                body_names=self.hand_layer.hand_body_names,
-                                                hand_base_pose=np.concat(
-                                                    [self.wrist_pos.squeeze().cpu().detach().numpy(),
-                                                     wrist_quat.squeeze().cpu().detach().numpy()]),
-                                                hand_qpos=joint_angles.cpu().detach().numpy(),
-                                                is_collision=self.hand_layer.use_collision_mesh)
+                hand_trimesh_all = trimesh.util.concatenate(
+                    [mesh_meta[0] for _, mesh_meta in cur_hand_trimeshes.items()])
+                # trimesh.Scene(hand_trimesh_all).show()
+                pred_vertices = torch.tensor(hand_trimesh_all.vertices, device=self.device).unsqueeze(0).float()
+                pred_normals = torch.tensor(hand_trimesh_all.vertex_normals, device=self.device).unsqueeze(0).float()
+            else:
+                self.hand_layer.ori_hand_p3d_meshes = mjw_geoms_to_pytorch3d_meshes(
+                    self.hand_layer.mj_model,
+                    self.hand_layer.mjw_model,
+                    self.hand_layer.mjw_data,
+                    body_names=self.hand_layer.hand_body_names,
+                    hand_base_pose=torch.concat([self.wrist_pos.squeeze(), wrist_quat.squeeze()]),
+                    hand_qpos=joint_angles,
+                    is_collision=self.hand_layer.use_collision_mesh,
+                    body_p3d_meshes=self.hand_layer.ori_hand_p3d_meshes,
+                    device=self.device
+                )
 
-        hand_mesh = trimesh.util.concatenate(cur_hand_meshes.values())
-        pred_vertices = torch.tensor(hand_mesh.vertices, device=self.device).unsqueeze(0).float()
-        pred_normals = torch.tensor(hand_mesh.vertex_normals, device=self.device).unsqueeze(0).float()
+                hand_p3dmesh_all = pytorch3d.structures.join_meshes_as_batch(
+                    [mesh_meta[0] for _, mesh_meta in self.hand_layer.ori_hand_p3d_meshes.items()])
+                pred_vertices = torch.concat(hand_p3dmesh_all.verts_list()).unsqueeze(0)
+                pred_normals = torch.concat(hand_p3dmesh_all.verts_normals_list()).unsqueeze(0)
+                # trimesh.Scene(p3d_to_trimesh(hand_p3dmesh_all)).show()
+        else:
+            pred_vertices, pred_normals = self.hand_layer.get_forward_vertices(wrist_pose, joint_angles)
 
         hand_anchors = self.hand_anchor_layer(pred_vertices)
         hand_anchors_normal = self.hand_anchor_layer(pred_normals)
 
         pred = {'vertices': pred_vertices, 'normals': pred_normals}
+        self.hand_verts = o3d_vox_downsample(pred_vertices.squeeze().detach().cpu().numpy())
+        self.hand_vert_normals = o3d_vox_downsample(pred_normals.squeeze().detach().cpu().numpy())
 
         loss_collision_obstacle = 0
         if obstacle is not None:
@@ -813,19 +853,38 @@ class HandOptimizer(torch.nn.Module):
         # Init grasp
         theta = self.init_joint_angles.reshape(-1, self.hand_layer.n_dofs)
 
-        wrist_quat = torch.nn.functional.normalize(self.init_wrist_rot) if self.use_quat \
-            else roma.rotmat_to_unitquat(robust_compute_rotation_matrix_from_ortho6d(self.init_wrist_rot))
+        if USE_MUJOCO:
+            wrist_quat = torch.nn.functional.normalize(self.init_wrist_rot) if self.use_quat \
+                else roma.rotmat_to_unitquat(robust_compute_rotation_matrix_from_ortho6d(self.init_wrist_rot))
 
-        verts_init, verts_normal_init = self.hand_layer.get_forward_vertices_mujoco(
-            hand_base_pose=np.concat([self.init_wrist_pos.squeeze().cpu().detach().numpy(),
-                                      wrist_quat.squeeze().cpu().detach().numpy()]),
-            hand_qpos=theta.cpu().detach().numpy())
+            verts_init, verts_normal_init = self.hand_layer.get_forward_vertices_mujoco(
+                hand_base_pose=np.concat([self.init_wrist_pos.squeeze().cpu().detach().numpy(),
+                                          wrist_quat.squeeze().cpu().detach().numpy()]),
+                hand_qpos=theta.cpu().detach().numpy())
 
-        # Show grasp and hand anchors
-        verts, verts_normal = self.hand_layer.get_forward_vertices_mujoco(
-            hand_base_pose=np.concat([grasp.wrist_pos.squeeze(), grasp.wrist_quat.squeeze()]),
-            hand_qpos=grasp.joint_angles.reshape(-1, self.hand_layer.n_dofs))
-        anchors = self.hand_anchor_layer.forward(verts)
+            # Show grasp and hand anchors
+            verts, verts_normal = self.hand_layer.get_forward_vertices_mujoco(
+                hand_base_pose=np.concat([grasp.wrist_pos.squeeze(), grasp.wrist_quat.squeeze()]),
+                hand_qpos=grasp.joint_angles.reshape(-1, self.hand_layer.n_dofs))
+            anchors = self.hand_anchor_layer.forward(verts)
+        else:
+            # init grasp
+            wrist_pose = torch.eye(4).reshape(1, 4, 4).repeat(self.batches_num, 1, 1).to(self.device).float()
+            if self.use_quat:
+                wrist_pose[:, :3, :3] = roma.unitquat_to_rotmat(self.init_wrist_rot)
+            else:  # use rot6d representation
+                wrist_pose[:, :3, :3] = robust_compute_rotation_matrix_from_ortho6d(self.init_wrist_rot)
+            wrist_pose[:, :3, 3] = self.init_wrist_pos
+            verts_init, verts_normal_init = self.hand_layer.get_forward_vertices(wrist_pose, theta)
+
+            # show grasp and hand anchors
+            pose = torch.eye(4).reshape(1, 4, 4).repeat(self.batches_num, 1, 1).to(self.device).float()
+            theta = torch.from_numpy(grasp.joint_angles).to(self.device).reshape(-1, self.hand_layer.n_dofs)
+            pose[:, :3, :3] = roma.unitquat_to_rotmat(
+                torch.from_numpy(grasp.wrist_quat[:, [1, 2, 3, 0]]).to(self.device))
+            pose[:, :3, 3] = torch.from_numpy(grasp.wrist_pos).to(self.device)
+            verts, verts_normal = self.hand_layer.get_forward_vertices(pose, theta)
+            anchors = self.hand_anchor_layer.forward(verts)
 
         for idx in range(self.batches_num):
             pc = trimesh.PointCloud(verts[idx].squeeze().cpu().numpy(), colors=(0, 255, 255))

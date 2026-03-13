@@ -1,10 +1,8 @@
 # leap_hand layer for torch
-from typing import Optional, Union
 import torch
 import trimesh
 import os
 import numpy as np
-import copy
 import coacd
 
 from mesh_to_sdf import get_surface_point_cloud
@@ -12,14 +10,17 @@ from scipy.spatial import KDTree
 import point_cloud_utils as pcu
 
 import mujoco as mj
+import mujoco_warp as mjw
+import pytorch3d.structures
 import pytorch_kinematics as pk
 
 # judo
 from judo import PACKAGE_ROOT
 
 # mjmanip
-from mjmanip.utils import mj_get_geom_mesh_meta
+from mjmanip.utils import IDENTITY_POSE, mj_get_geom_mesh_meta
 from mjmanip.trimesh_utils import mj_geoms_to_trimeshes
+from mjmanip.pytorch3d_utils import mjw_geoms_to_pytorch3d_meshes
 from mjmanip.robot.leap_mjx import HAND_MODEL_DIR as LEAP_HAND_MODEL_DIR, LeapMjx
 
 LEAP_LAYER_HAND_ASSETS_DIR = f"{PACKAGE_ROOT}/hand_layers/leap_hand_layer/assets"
@@ -49,9 +50,11 @@ class MJLeapHandLayer(torch.nn.Module):
         self.BASE_DIR = os.path.split(os.path.abspath(__file__))[0]
         self.hand_model_desc = hand_model_desc
         self.is_from_mjcf = hand_model_desc.endswith('.xml')
-        self.mj_model, self.chain = pk.build_chain_from_mjcf(hand_model_desc)
+        self.mj_spec, self.chain = pk.build_chain_from_mjcf(hand_model_desc, device)
+        self.mj_model = self.mj_spec.compile()
         self.mj_data = mj.MjData(self.mj_model)
-        self.chain = self.chain.to(device=device)
+        self.mjw_model = mjw.put_model(self.mj_model)
+        self.mjw_data = mjw.put_data(self.mj_model, self.mj_data, nworld=1, njmax=300)
         self.hand_body_names = [self.mj_model.body(i).name for i in range(self.mj_model.nbody)]
         self.hand_body_names.remove('world')
 
@@ -77,7 +80,8 @@ class MJLeapHandLayer(torch.nn.Module):
             'leap_mount_visual', 'th_ds_visual',
             'if_ds_visual', 'mf_ds_visual', 'rf_ds_visual']
 
-        self.ori_hand_meshes: dict[str, trimesh.Trimesh] = {}
+        self.ori_hand_meshes: dict[str, dict[str, tuple[trimesh.Trimesh, np.ndarray]]] = {}
+        self.ori_hand_p3d_meshes: dict[str, tuple[pytorch3d.structures.Meshes, pytorch3d.transforms.Transform3d]] = {}
         self.hand_cvx_meshes: dict[str, trimesh.Trimesh] = {}
         self.meshes_meta: dict[str, tuple[trimesh.Trimesh, torch.Tensor, torch.Tensor, torch.Tensor]] = None
         self.make_contact_points = True
@@ -92,13 +96,24 @@ class MJLeapHandLayer(torch.nn.Module):
         theta = np.zeros((1, self.n_dofs), dtype=np.float32)
 
         # Hand meshes
+        if False:
+            self.ori_hand_p3d_meshes = mjw_geoms_to_pytorch3d_meshes(
+                self.mj_model,
+                self.mjw_model, self.mjw_data,
+                body_names=self.hand_body_names,
+                hand_base_pose=torch.from_numpy(IDENTITY_POSE),
+                hand_qpos=torch.from_numpy(theta),
+                is_collision=self.use_collision_mesh,
+                device=self.device
+            )
         self.ori_hand_meshes = mj_geoms_to_trimeshes(self.mj_model, self.mj_data,
                                                      body_names=self.hand_body_names,
-                                                     hand_base_pose=np.array([0, 0, 0, 1, 0, 0, 0]),
+                                                     hand_base_pose=IDENTITY_POSE,
                                                      hand_qpos=theta,
                                                      is_collision=self.use_collision_mesh)
-
-        self.hand_cvx_meshes = self.save_part_meshes(self.ori_hand_meshes,
+        hand_meshes = {_: m[0] for _, m in self.ori_hand_meshes.items()}
+        # trimesh.Scene([self.ori_hand_meshes]).show()
+        self.hand_cvx_meshes = self.save_part_meshes(hand_meshes,
                                                      dst_dir=f"{LEAP_LAYER_HAND_ASSETS_DIR}/hand_meshes_cvx")
         self.hand_mesh_points = self.sample_points_on_mesh(self.hand_cvx_meshes,
                                                            dst_dir=f"{LEAP_LAYER_HAND_ASSETS_DIR}/hand_points")
@@ -116,7 +131,7 @@ class MJLeapHandLayer(torch.nn.Module):
         finger_start = 0  # torch.tensor(0, dtype=torch.long, device=self.device)
         for mesh_name, mesh in self.ori_hand_meshes.items():
             # torch.tensor(self.meshes[link_name][1].shape[0], dtype=torch.long, device=self.device)
-            end = segment_start + mesh.vertices.shape[0]
+            end = segment_start + mesh[0].vertices.shape[0]
             hand_segment_indices[mesh_name] = torch.arange(segment_start, end)  # [segment_start, end]
             if mesh_name in self.ordered_finger_endeffort:
                 hand_finger_indices[mesh_name] = torch.arange(finger_start, end)  # [finger_start, end]
@@ -182,10 +197,11 @@ class MJLeapHandLayer(torch.nn.Module):
         cur_hand_meshes = mj_geoms_to_trimeshes(self.mj_model, self.mj_data,
                                                 body_names=self.hand_body_names,
                                                 hand_base_pose=hand_base_pose, hand_qpos=hand_qpos,
-                                                is_collision=self.use_collision_mesh)
-        hand_mesh = trimesh.util.concatenate(cur_hand_meshes.values())
-        verts = torch.tensor(hand_mesh.vertices, device=self.device).unsqueeze(0).float()
-        verts_normal = torch.tensor(hand_mesh.vertex_normals, device=self.device).unsqueeze(0).float()
+                                                is_collision=self.use_collision_mesh,
+                                                body_trimeshes=self.ori_hand_meshes)
+        hand_mesh_all = trimesh.util.concatenate([m[0] for _, m in cur_hand_meshes.items()])
+        verts = torch.tensor(hand_mesh_all.vertices, device=self.device).unsqueeze(0).float()
+        verts_normal = torch.tensor(hand_mesh_all.vertex_normals, device=self.device).unsqueeze(0).float()
         return verts, verts_normal
 
     def save_part_meshes(self, hand_meshes: dict[str, trimesh.Trimesh], dst_dir: str, method='convexhull',
@@ -232,8 +248,7 @@ class MJLeapHandLayer(torch.nn.Module):
                 pc = trimesh.PointCloud(points, colors=(255, 255, 0))
                 ray_visualization = trimesh.load_path(np.hstack((points,
                                                                  points + point_normals / 100)).reshape(-1, 2, 3))
-                scene = trimesh.Scene([pc, ray_visualization])
-                scene.show()
+                trimesh.Scene([pc, ray_visualization]).show()
 
             mesh_points = np.concatenate([points, point_normals], axis=-1)
             all_mesh_points[mesh_name] = mesh_points
@@ -285,63 +300,3 @@ class MJLeapHandLayer(torch.nn.Module):
         if save_to_disk:
             print("visible points saving: finished")
         return visible_points
-
-
-class MJLeapAnchor(torch.nn.Module):
-    def __init__(self):
-        super().__init__()
-        # vert_idx
-        vert_idx = np.array([
-            # thumb finger
-            1382, 1522, 1541, 1667, 1493,
-            428, 179,
-
-            # index finger
-            1806, 2289, 2408, 2405, 2442,  # 2324
-            19,
-
-            # middle finger
-            2504, 3016, 3164, 3049, 3060,
-            364, 626,
-
-            # ring finger
-            3454, 3756, 3863, 3844, 3915,
-            0, 0,  # place holder
-
-            # little finger
-            0, 0, 0, 0, 0,  # place holder
-
-            # # plus
-            2420, 2332, 2131, 2241,  # 2440  2463
-            3129, 3133, 2895, 3005,
-            3815, 3778, 3644, 3713,
-            0, 0,  # place holder
-
-        ])
-        # self.vert_idx = np.load(os.path.join(self.BASE_DIR, 'anchor_idx.npy'))
-        self.register_buffer("vert_idx", torch.from_numpy(vert_idx).long())
-
-    def forward(self, vertices):
-        """
-        vertices: TENSOR[N_BATCH, 4040, 3]
-        """
-        anchor_pos = vertices[:, self.vert_idx, :]
-        return anchor_pos
-
-    def pick_points(self, vertices: np.ndarray):
-        import open3d as o3d
-        print("")
-        print(
-            "1) Please pick at least three correspondences using [shift + left click]"
-        )
-        print("   Press [shift + right click] to undo point picking")
-        print("2) Afther picking points, press q for close the window")
-        pcd = o3d.geometry.PointCloud()
-        pcd.points = o3d.utility.Vector3dVector(vertices)
-        vis = o3d.visualization.VisualizerWithEditing()
-        vis.create_window()
-        vis.add_geometry(pcd)
-        vis.run()  # user picks points
-        vis.destroy_window()
-        print(vis.get_picked_points())
-        return vis.get_picked_points()

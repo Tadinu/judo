@@ -8,11 +8,11 @@ import point_cloud_utils as pcu
 from mesh_to_sdf import get_surface_point_cloud
 from scipy.spatial import KDTree
 import torch
-from pytorch3d.transforms import quaternion_apply
 
 import mujoco as mj
 
 # mjmanip
+from mjmanip.utils import IDENTITY_POSE
 from mjmanip.trimesh_utils import mj_geoms_to_trimeshes
 
 
@@ -21,11 +21,13 @@ class ObjectData:
     points: list[torch.Tensor]
     normals: list[torch.Tensor]
     meshes: list[trimesh.Trimesh]
+    poses: list[np.ndarray]
+    mesh_filepath: str = None
     scale: float = 1.0
     mesh_paths: Optional[list[str]] = None
 
     @classmethod
-    def get_object_data(cls, mesh_paths: list[str], voxel_size=0.006, scale=1.0, vis=False, watertight_process=True,
+    def get_meshes_data(cls, mesh_paths: list[str], voxel_size=0.006, scale=1.0, vis=False, watertight_process=True,
                         device: torch.device = torch.device('cuda'),
                         **kwargs) -> ObjectData:
         meshes = []
@@ -47,25 +49,35 @@ class ObjectData:
                           normals=normals,
                           mesh_paths=mesh_paths,
                           meshes=meshes,  # scaled mesh
+                          poses=[IDENTITY_POSE] * len(meshes),
                           scale=scale)
 
     @classmethod
-    def get_mj_object_data(cls, obj_model: Union[mj.MjModel, str], body_names: Optional[list[str]] = None,
+    def get_mj_object_data(cls, mj_model: Union[mj.MjModel, str], mj_data: Optional[mj.MjData] = None,
+                           body_names: Optional[list[str]] = None,
                            voxel_size: float = 0.006, scale: float = 1.0,
                            merging_meshes: bool = True,
                            device: torch.device = torch.device('cuda')) -> ObjectData:
-        if isinstance(obj_model, str):
-            assert obj_model.endswith('.xml')
-            obj_model: mj.MjModel = mj.MjModel.from_xml_path(obj_model)
+        if isinstance(mj_model, str):
+            assert mj_model.endswith('.xml')
+            mj_model: mj.MjModel = mj.MjModel.from_xml_path(mj_model)
         else:
             pass
 
         if not body_names:
-            body_names = [obj_model.body(i).name for i in range(obj_model.nbody)]
+            body_names = [mj_model.body(i).name for i in range(mj_model.nbody)]
             body_names.remove('world')
-        meshes = list(mj_geoms_to_trimeshes(obj_model, body_names=body_names, is_collision=True).values())
+        meshes = []
+        mesh_poses = []
+        for _, m in mj_geoms_to_trimeshes(mj_model, mj_data, body_names=body_names, is_collision=True).items():
+            meshes.append(m[0])
+            mesh_poses.append(m[1])
         if merging_meshes:
             meshes = [trimesh.util.concatenate(meshes)]
+            base_body = mj_model.body(body_names[0])
+            base_body_data = mj_data.body(body_names[0]) if mj_data else None
+            mesh_poses = [np.concat([base_body_data.xpos, base_body_data.xquat]) if mj_data \
+                              else np.concat([base_body.pos, base_body.quat])]
         points = []
         normals = []
         for mesh in meshes:
@@ -81,6 +93,7 @@ class ObjectData:
                           normals=normals,
                           mesh_paths=None,
                           meshes=meshes,  # already scaled meshes
+                          poses=mesh_poses,
                           scale=scale)
 
     @property
@@ -95,25 +108,34 @@ class ObjectData:
         assert len(new_poses) == len(self.meshes)
         device = self.points[0].device
         for i, mesh in enumerate(self.meshes):
+            # Old mesh pose
+            old_mesh_pose = self.poses[i]
+            old_mesh_transf = trimesh.transformations.quaternion_matrix(old_mesh_pose[3:])
+            old_mesh_transf[:3, 3] = old_mesh_pose[:3]
+
+            # New mesh pose
             new_mesh_pose = new_poses[i]
-            # Apply [new_pose] to mesh in place
             new_mesh_transf = trimesh.transformations.quaternion_matrix(new_mesh_pose[3:])
             new_mesh_transf[:3, 3] = new_mesh_pose[:3]
-            mesh.apply_transform(new_mesh_transf)
+
+            # Apply [new_pose] to mesh in place
+            delta_tf = new_mesh_transf @ np.linalg.inv(old_mesh_transf)
 
             # Resample the mesh
             # NOTE: points & normals dtype are torch.float32 or float32 for convenient operations later
             if resample:
+                mesh.apply_transform(delta_tf)
                 v_sampled, n_sampled = sample_mesh_surface(mesh)
                 # NOTE: Points, normals can have new lengths so not copying here
                 self.points[i] = torch.tensor(v_sampled, dtype=torch.float32, device=device)
                 self.normals[i] = torch.tensor(n_sampled, dtype=torch.float32, device=device)
             else:
-                new_mesh_pos = torch.tensor(new_mesh_pose[:3], dtype=torch.float32, device=device)
-                new_mesh_rot = torch.tensor(new_mesh_pose[3:], dtype=torch.float32, device=device)
-                self.points[i].copy_(quaternion_apply(new_mesh_rot, self.points[i]) + new_mesh_pos)
-                self.normals[i].copy_(
-                    torch.nn.functional.normalize(quaternion_apply(new_mesh_rot, self.normals[i]), dim=-1))
+                delta_tf_torch = torch.tensor(delta_tf, dtype=torch.float32, device=device)
+                R = delta_tf_torch[:3, :3]
+                t = delta_tf_torch[:3, 3]
+                self.points[i].copy_(self.points[i] @ R.T + t)
+                self.normals[i].copy_(torch.nn.functional.normalize(self.normals[i] @ R.T, dim=-1))
+        self.poses = new_poses
 
 
 def get_stable_pose(mesh):
@@ -254,7 +276,7 @@ if __name__ == '__main__':
 
     objects = objaverse.load_objects(uids=['917f8aaadff04833a8601caaa2b76d95'])
     for uid, obj_filepath in objects.items():
-        ObjectData.get_object_data(mesh_filepath=obj_filepath,
+        ObjectData.get_meshes_data(mesh_filepath=obj_filepath,
                                    scale=0.05851385052149179)
         # obj_mesh = trimesh.load(obj_filepath, force='mesh')
         # face_count = obj_mesh.faces.shape[0]
@@ -264,6 +286,6 @@ if __name__ == '__main__':
         # obj_mesh.show()
         # exit()
 
-    ObjectData.get_object_data(
+    ObjectData.get_meshes_data(
         mesh_filepath='/media/v-wewei/T01/objaverse/hf-objaverse-v1/glbs/000-121/a9e49d03467c47a0bf39931a2a8ac6aa.glb',
         scale=0.003811418377331815)

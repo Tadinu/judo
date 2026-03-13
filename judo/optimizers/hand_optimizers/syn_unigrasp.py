@@ -53,7 +53,7 @@ if __name__ == "__main__":
         filepath_list = glob.glob('{}/*.obj'.format(mesh_dir))
 
     for obj_filepath in filepath_list:
-        object_data = ObjectData.get_object_data([obj_filepath], device=device) if obj_filepath.endswith('.obj') else (
+        object_data = ObjectData.get_meshes_data([obj_filepath], device=device) if obj_filepath.endswith('.obj') else (
             ObjectData.get_mj_object_data(obj_filepath, body_names=['mug'] if use_mug else None,
                                           device=device))
         obj_name = obj_filepath.split('/')[-1].split('.')[0]

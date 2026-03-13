@@ -6,7 +6,7 @@ from loop_rate_limiters import RateLimiter
 
 import torch
 
-torch.set_default_device(torch.device('cuda:0'))
+torch.set_default_device(torch.device('cuda'))
 torch.set_default_dtype(torch.float32)
 torch_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 import numpy as np
@@ -21,7 +21,7 @@ from mjmanip.robot.arm_hand import ArmHandDiffIK
 # NOTE: LeapMjx hand is more robust than Leap, so use [panda_leap_mjx] for now!
 # from mjmanip.robot.panda_leap import PandaLeapEnv, PandaLeap, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
 from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
-from mjmanip.utils import mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap
+from mjmanip.utils import mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene, mj_draw_spheres
 
 if PandaLeapMjx:
     PandaLeapMjx.NBATCHES = 1
@@ -35,12 +35,12 @@ from judo.simulation.mj_simulation import MJSimulation
 from judo.simulation.nt_simulation import NTSimulation
 
 # hand optimizer
-from hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams
+from hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams, USE_MUJOCO
 from object_utils import ObjectData
 
 RECORD_TIME = 300
 OBJ_NAME = PandaLeap.OBJECT_NAMES[0]
-HAND_URDF_PATH = f"{PACKAGE_ROOT}/hand_layers/leap_hand_layer/assets/leap_hand_right.urdf"
+HAND_URDF_PATH = f"{PACKAGE_ROOT}/hand_layers/assets/leap_hand_right.urdf"
 USE_XML_HAND = True
 
 
@@ -102,8 +102,9 @@ class UniGraspApp:
                                               joint_limit_lower=-np.pi / 6,
                                               joint_limit_upper=np.pi / 6)
 
-        self.object_data = ObjectData.get_mj_object_data(self.mj_model, body_names=['obj'], device=torch_device)
-        # obj_name = obj_filepath.split('/')[-1].split('.')[0]
+        self.object_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data,
+                                                         body_names=['obj'], device=torch_device)
+
         self.hand_opt = HandOptimizer(device=torch_device,
                                       object_data=self.object_data,
                                       hand_params=HandParams(hand_model_name='leap_hand',
@@ -206,7 +207,26 @@ class UniGraspApp:
             self.hand_opt.visualize_grasp(next_grasp, self.object_data.meshes)
 
         # Traces
+        # Hand pcl
+        self.visualize_hand_pcl()
+
+        # Obj pcl
+        self.visualize_obj_pcl()
+
         # end = time.perf_counter()
+
+    def visualize_hand_pcl(self):
+        mj_draw_spheres(self.sim.mj_viewer.user_scn,
+                        positions=self.hand_opt.hand_verts.tolist(),
+                        sizes=len(self.hand_opt.hand_verts) * [[0.005]],
+                        rgbas=len(self.hand_opt.hand_verts) * [[1, 1, 0, 1]])
+
+    def visualize_obj_pcl(self):
+        obj_points = self.hand_opt.object_data.all_points.detach().cpu().numpy().tolist()
+        mj_draw_spheres(self.sim.mj_viewer.user_scn,
+                        positions=obj_points,
+                        sizes=len(obj_points) * [[0.005]],
+                        rgbas=len(obj_points) * [[0, 1, 0, 1]])
 
     def toggle_paused_status(self) -> None:
         """Event handler for processing pause status updates."""
