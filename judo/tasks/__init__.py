@@ -14,6 +14,7 @@ from judo.tasks.leap_object_rotate import LeapObjectRotate, LeapObjectRotateConf
 from judo.tasks.allegro_cube_rotate import AllegroCubeRotate, AllegroCubeRotateConfig
 from judo.tasks.iiwa7_allegro_pick import IIWA7AllegroPick, IIWA7AllegroPickConfig
 from judo.tasks.panda_leap_pick import PandaLeapPick, PandaLeapPickConfig
+from judo.tasks.triple_pandas_rotate import TriplePandasRotate, TriplePandasRotateConfig
 
 _registered_tasks: Dict[str, Tuple[Type[Task], Type[TaskConfig]]] = {
     CylinderPush.config_t.task_name: (CylinderPush, CylinderPushConfig),

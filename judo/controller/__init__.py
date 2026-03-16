@@ -14,6 +14,7 @@ from judo.controller.overrides import (
     set_default_leap_object_rotate_overrides,
     set_default_iiwa7_allegro_pick_overrides,
     set_default_panda_leap_pick_overrides,
+    set_default_triple_pandas_rotate_overrides
 )
 from judo.utils.assets import download_and_extract_meshes
 
@@ -34,6 +35,7 @@ set_default_leap_freejoint_object_pick_overrides()
 set_default_leap_object_rotate_overrides()
 set_default_iiwa7_allegro_pick_overrides()
 set_default_panda_leap_pick_overrides()
+set_default_triple_pandas_rotate_overrides()
 
 __all__ = [
     "Controller",

@@ -224,6 +224,12 @@ class Task(ABC, Generic[ConfigT]):
         else:
             self.nt_sim.sim_backend.sim_time = value
 
+    def sensors_contact_cost(self, sensors_data: np.ndarray, sensor_idxs: list[int]) -> float:
+        return np.sum(np.array([sensors_data[..., s] for s in sensor_idxs]))
+
+    def sensor_value(self, sensors_data: np.ndarray, sensor_idx: int, sensor_dim: int) -> np.ndarray:
+        return sensors_data[..., sensor_idx:sensor_idx + sensor_dim]
+
     @abstractmethod
     def reward(self,
                states: np.ndarray,

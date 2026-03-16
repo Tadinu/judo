@@ -1,12 +1,12 @@
 defaults:
   - judo_dora_default
 
-task: panda_leap_pick
+task: triple_pandas_rotate
 optimizer: cem
 custom_tasks:
-  iiwa7_allegro_pick:
-    task: judo.tasks.panda_leap_pick.PandaLeapPick
-    config: judo.tasks.panda_leap_pick.PandaLeapPick
+  triple_pandas_rotate:
+    task: judo.tasks.triple_pandas_rotate.TriplePandasRotate
+    config: judo.tasks.triple_pandas_rotate.TriplePandasRotate
 
 custom_optimizers:
   cem:
@@ -18,12 +18,12 @@ custom_optimizers:
 
 # example of how to use task-specific controller config overrides
 controller_config_overrides:
-  panda_leap_pick:
+  triple_pandas_rotate:
     horizon: 0.25
     spline_order: ZERO
 
 optimizer_config_overrides:
-  panda_leap_pick:
+  triple_pandas_rotate:
     ps:
       num_nodes: 4
       num_rollouts: 128

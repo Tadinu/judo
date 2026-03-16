@@ -157,3 +157,18 @@ def set_default_panda_leap_pick_overrides() -> None:
             "action_normalizer": NormalizerType.MIN_MAX.name
         },
     )
+
+
+def set_default_triple_pandas_rotate_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the leap cube down task."""
+    from judo.utils.fabrics_utils import FabricsAgent
+    set_config_overrides(
+        "triple_pandas_rotate",
+        ControllerConfig,
+        {
+            "horizon": 1.0,
+            "spline_order": SplineType.CUBIC.name,
+            "max_num_traces": 1,
+            "action_normalizer": NormalizerType.MIN_MAX.name
+        },
+    )

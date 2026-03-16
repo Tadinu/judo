@@ -77,6 +77,7 @@ class LeapObjectRotate(LeapCube):
         self.obj_contact_with_palm_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_contact_with_palm")
 
     def init_ids(self):
+        super().init_ids()
         self.obj_id = mj.mj_name2id(self.mj_model, mj.mjtObj.mjOBJ_BODY, OBJ_NAME)
         self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [f"{OBJ_NAME}_freejoint"])
         self.target_mocap_id = mj_get_mocap_id(self.mj_model, "target")

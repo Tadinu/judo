@@ -56,7 +56,7 @@ from judo.utils.mujoco import mj_get_qpos_ids, mj_get_dof_ids, mj_get_mocap_id
 USE_MUG = False
 
 
-class LeapFreeJointObjectPickPhase(Enum):
+class ObjectRelocatingPhase(Enum):
     """Defines the phases of the Leap Free-joint object pick task."""
 
     REACHING_OBJ = enum.auto()
@@ -117,6 +117,7 @@ class LeapFreeJointObjectPick(LeapCube):
         super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
 
     def init_ids(self):
+        super().init_ids()
         self.OBJ_NAME = hand_class.OBJECT_NAMES[0]
         OBJ_NAME = self.OBJ_NAME
         self.obj_id = self.mj_model.body(OBJ_NAME).id
@@ -200,21 +201,21 @@ class LeapFreeJointObjectPick(LeapCube):
             return super().actuator_ctrlrange
 
     @property
-    def cur_phase(self) -> LeapFreeJointObjectPickPhase:
+    def cur_phase(self) -> ObjectRelocatingPhase:
         # Phase 1: Reaching obj
         if True:
             cur_sensor_data = self.mj_data.sensordata
             obj_reaching_err = cur_sensor_data[self.obj_pos_distance_to_grasp_sensor_idx:
                                                self.obj_pos_distance_to_grasp_sensor_idx + 3]
             if np.square(obj_reaching_err).sum() > self.reach_threshold ** 2:
-                return LeapFreeJointObjectPickPhase.REACHING_OBJ
+                return ObjectRelocatingPhase.REACHING_OBJ
         else:
             cur_obj_position = self.mj_data.body(self.OBJ_NAME).xpos
             cur_grasp_site_position = self.mj_data.site(self.grasp_site_name).xpos
             cur_obj_grasp_site_distance_square = np.square(cur_obj_position - cur_grasp_site_position).sum()
             is_cur_obj_within_grasp = cur_obj_grasp_site_distance_square < self.reach_threshold ** 2
             if not is_cur_obj_within_grasp:
-                return LeapFreeJointObjectPickPhase.REACHING_OBJ
+                return ObjectRelocatingPhase.REACHING_OBJ
 
         # Phase 2: Orientating Obj/Bringing Obj to Goal
         obj_orientation_err = cur_sensor_data[self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
@@ -224,9 +225,9 @@ class LeapFreeJointObjectPick(LeapCube):
                                                              self.obj_pos_distance_to_goal_sensor_idx + 3]).sum()
             if self.last_obj_distance_to_goal > obj_distance_to_goal:
                 self.last_obj_distance_to_goal = obj_distance_to_goal
-                return LeapFreeJointObjectPickPhase.ORIENTATING_OBJ
+                return ObjectRelocatingPhase.ORIENTATING_OBJ
 
-        return LeapFreeJointObjectPickPhase.BRINGING_OBJ_TO_GOAL
+        return ObjectRelocatingPhase.BRINGING_OBJ_TO_GOAL
 
     def sensors_contact_cost(self, sensors_data: np.ndarray, sensor_idxs: dict[str, int]) -> float:
         return np.sum(np.array([sensors_data[..., s] for _, s in sensor_idxs.items()]))
@@ -245,7 +246,7 @@ class LeapFreeJointObjectPick(LeapCube):
         """
         # rewards = super().reward(states, sensors, controls, system_metadata)
         # obj_pos = sensors[..., self.obj_pos_sensor_idx:self.obj_pos_sensor_idx + 3]
-        is_cur_obj_within_grasp = self.cur_phase != LeapFreeJointObjectPickPhase.REACHING_OBJ
+        is_cur_obj_within_grasp = self.cur_phase != ObjectRelocatingPhase.REACHING_OBJ
 
         # Stage 1: Obj Reaching cost - Ignore Z
         reaching_err = self.sensor_value(sensors, self.obj_pos_distance_to_grasp_sensor_idx, 2)

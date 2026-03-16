@@ -412,3 +412,41 @@ def set_default_panda_leap_pick_overrides() -> None:
             "temperature": 0.0025,
         },
     )
+
+
+def set_default_triple_pandas_rotate_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the triple_pandas_rotate task."""
+    set_config_overrides(
+        "triple_pandas_rotate",
+        PredictiveSamplingConfig,
+        {
+            "num_nodes": 4,
+            "num_rollouts": 128,
+            "use_noise_ramp": True,
+            "noise_ramp": 4.0,
+            "sigma": 0.2,
+        },
+    )
+    set_config_overrides(
+        "triple_pandas_rotate",
+        CrossEntropyMethodConfig,
+        {
+            "num_nodes": 4,
+            "num_rollouts": 32,
+            "num_elites": 5,
+            "use_noise_ramp": True,
+            "noise_ramp": 4.0,
+        },
+    )
+    set_config_overrides(
+        "triple_pandas_rotate",
+        MPPIConfig,
+        {
+            "num_nodes": 4,
+            "num_rollouts": 128,
+            "use_noise_ramp": True,
+            "noise_ramp": 4.0,
+            "sigma": 0.2,
+            "temperature": 0.0025,
+        },
+    )

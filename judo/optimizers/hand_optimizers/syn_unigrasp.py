@@ -9,7 +9,7 @@ from hand_optimizer import HandOptimizer, HandOptimizerParams, HandGrasp
 from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
 
 if PandaLeapMjx:
-    PandaLeapMjx.NBATCHES = 1
+    PandaLeapMjx.NINSTANCES = 1
     PandaLeap = PandaLeapMjx
 if PandaLeapMjxEnv:
     PandaLeapEnv = PandaLeapMjxEnv

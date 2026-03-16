@@ -16,7 +16,8 @@ from judo.optimizers.overrides import (
     set_default_leap_freejoint_object_pick_overrides,
     set_default_leap_object_rotate_overrides,
     set_default_iiwa7_allegro_pick_overrides,
-    set_default_panda_leap_pick_overrides
+    set_default_panda_leap_pick_overrides,
+    set_default_triple_pandas_rotate_overrides
 )
 from judo.optimizers.ps import PredictiveSampling, PredictiveSamplingConfig
 
@@ -31,6 +32,7 @@ set_default_leap_freejoint_object_pick_overrides()
 set_default_leap_object_rotate_overrides()
 set_default_iiwa7_allegro_pick_overrides()
 set_default_panda_leap_pick_overrides()
+set_default_triple_pandas_rotate_overrides()
 
 _registered_optimizers: dict[str, tuple[Type[Optimizer], Type[OptimizerConfig]]] = {
     "cem": (CrossEntropyMethod, CrossEntropyMethodConfig),

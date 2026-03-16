@@ -68,6 +68,7 @@ class IIWA7AllegroPick(Task[IIWA7AllegroPickConfig]):
         self.target_mocap_id: int = -1
 
     def init_ids(self):
+        super().init_ids()
         self.obj_id = mj.mj_name2id(self.mj_model, mj.mjtObj.mjOBJ_BODY, OBJ_NAME)
         self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
         self.target_mocap_id = mj_get_mocap_id(self.mj_model, IIWA7AllegroBiotac.goal_name(OBJ_NAME))

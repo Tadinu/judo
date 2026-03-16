@@ -24,7 +24,7 @@ from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_SCEN
 from mjmanip.utils import mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene, mj_draw_spheres
 
 if PandaLeapMjx:
-    PandaLeapMjx.NBATCHES = 1
+    PandaLeapMjx.NINSTANCES = 1
     PandaLeap = PandaLeapMjx
 if PandaLeapMjxEnv:
     PandaLeapEnv = PandaLeapMjxEnv
