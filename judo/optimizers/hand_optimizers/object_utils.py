@@ -13,7 +13,7 @@ import mujoco as mj
 
 # mjmanip
 from mjmanip.utils import IDENTITY_POSE
-from mjmanip.trimesh_utils import mj_geoms_to_trimeshes
+from mjmanip.trimesh_utils import mj_get_body_trimeshes
 
 
 @dataclass
@@ -69,14 +69,14 @@ class ObjectData:
             body_names.remove('world')
         meshes = []
         mesh_poses = []
-        for _, m in mj_geoms_to_trimeshes(mj_model, mj_data, body_names=body_names, is_collision=True).items():
+        for _, m in mj_get_body_trimeshes(mj_model, mj_data, body_names=body_names, is_collision=True).items():
             meshes.append(m[0])
             mesh_poses.append(m[1])
         if merging_meshes:
             meshes = [trimesh.util.concatenate(meshes)]
             base_body = mj_model.body(body_names[0])
             base_body_data = mj_data.body(body_names[0]) if mj_data else None
-            mesh_poses = [np.concat([base_body_data.xpos, base_body_data.xquat]) if mj_data \
+            mesh_poses = [np.concat([base_body_data.xpos, base_body_data.xquat]) if base_body_data \
                               else np.concat([base_body.pos, base_body.quat])]
         points = []
         normals = []
@@ -163,35 +163,26 @@ def get_watertight_vertices_normals(mesh: trimesh.Trimesh, voxel_size: float,
                                     watertight_process: bool = True,
                                     mesh_filepath: Optional[str] = None,
                                     vis: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
-    # normalize to the center
-    bbmin = mesh.vertices.min(0)
-    bbmax = mesh.vertices.max(0)
-    center = (bbmin + bbmax) * 0.5
-    mesh.vertices -= center  # center
     if watertight_process:
         if mesh.is_watertight:
             pass
         else:
-            pitch = mesh.extents.max() / 128  # size
-            if pitch < 0.002:
-                pitch = 0.002
-            use_binvox = False
-            if mesh.faces.shape[0] > 100:
-                use_binvox = True
+            pitch = max(mesh.extents.max() / 128, 0.002)
+            use_binvox = mesh.faces.shape[0] > 100
+            if use_binvox:
                 # change it to binvox method for better and speed up
                 vox = mesh.voxelized(pitch, 'binvox')
             else:
                 vox = mesh.voxelized(pitch)
             vox.fill()
-            bounds = vox.bounds
 
             mesh = vox.marching_cubes
+            mesh.vertices -= mesh.bounds[0]
             if use_binvox:
-                mesh.vertices -= (mesh.bounds[0] - 0)  # 0.5
-            else:
-                mesh.vertices -= mesh.bounds[0]
+                offset = 0  # 0.5
+                mesh.vertices += offset
             mesh.vertices *= pitch
-            mesh.vertices += bounds[0]
+            mesh.vertices += vox.bounds[0]
             # vw, fw = pcu.make_mesh_watertight(mesh.vertices, mesh.faces, resolution=50000)
             # mesh = trimesh.Trimesh(vertices=vw, faces=fw)
 
@@ -266,26 +257,3 @@ def create_plane_points_with_normal(lx, ly, grid_size):
     normals = np.ones_like(points)
     normals[:, :2] = 0
     return np.concatenate([points, normals], axis=1)
-
-
-if __name__ == '__main__':
-    # plane_points = create_plane_points_with_normal(0.15, 0.15, 0.01)
-    # pc = trimesh.PointCloud(plane_points[:, :3], colors=(0, 255, 255))
-    # pc.show()
-    import objaverse
-
-    objects = objaverse.load_objects(uids=['917f8aaadff04833a8601caaa2b76d95'])
-    for uid, obj_filepath in objects.items():
-        ObjectData.get_meshes_data(mesh_filepath=obj_filepath,
-                                   scale=0.05851385052149179)
-        # obj_mesh = trimesh.load(obj_filepath, force='mesh')
-        # face_count = obj_mesh.faces.shape[0]
-        # print(face_count)
-
-        # obj_mesh.apply_scale(0.05851385052149179)
-        # obj_mesh.show()
-        # exit()
-
-    ObjectData.get_meshes_data(
-        mesh_filepath='/media/v-wewei/T01/objaverse/hf-objaverse-v1/glbs/000-121/a9e49d03467c47a0bf39931a2a8ac6aa.glb',
-        scale=0.003811418377331815)

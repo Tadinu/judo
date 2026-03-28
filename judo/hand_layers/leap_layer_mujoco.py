@@ -19,7 +19,7 @@ from judo import PACKAGE_ROOT
 
 # mjmanip
 from mjmanip.utils import IDENTITY_POSE, mj_get_geom_mesh_meta
-from mjmanip.trimesh_utils import mj_geoms_to_trimeshes
+from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.pytorch3d_utils import mjw_geoms_to_pytorch3d_meshes
 from mjmanip.robot.leap_mjx import HAND_MODEL_DIR as LEAP_HAND_MODEL_DIR, LeapMjx
 
@@ -36,12 +36,14 @@ def mj_geom_mesh_path(mj_model: mj.MjModel, geom_name: str):
 
 class MJLeapHandLayer(torch.nn.Module):
     def __init__(self, hand_model_desc: str,
-                 to_mano_frame=True, show_mesh=False,
-                 device='cuda'):
+                 hand_base_pose: np.ndarray,
+                 joint_angles: np.ndarray,
+                 to_mano_frame: bool = True, show_mesh: bool = False,
+                 use_collision_mesh: bool = False,
+                 device: str = 'cuda'):
         super().__init__()
-
         self.show_mesh = show_mesh
-        self.use_collision_mesh = False
+        self.use_collision_mesh = use_collision_mesh
         self.to_mano_frame = to_mano_frame
         self.device = device
         self.name = 'leap_hand'
@@ -51,6 +53,10 @@ class MJLeapHandLayer(torch.nn.Module):
         self.hand_model_desc = hand_model_desc
         self.is_from_mjcf = hand_model_desc.endswith('.xml')
         self.mj_spec, self.chain = pk.build_chain_from_mjcf(hand_model_desc, device)
+        hand_base_spec = self.mj_spec.body(LeapMjx.HAND_BASE_NAME)
+        hand_base_spec.pos = hand_base_pose[:3]
+        hand_base_spec.quat = hand_base_pose[3:]
+        self.hand_base_pose = hand_base_pose
         self.mj_model = self.mj_spec.compile()
         self.mj_data = mj.MjData(self.mj_model)
         self.mjw_model = mjw.put_model(self.mj_model)
@@ -58,10 +64,11 @@ class MJLeapHandLayer(torch.nn.Module):
         self.hand_body_names = [self.mj_model.body(i).name for i in range(self.mj_model.nbody)]
         self.hand_body_names.remove('world')
 
-        self.joints_lower = self.chain.low
-        self.joints_upper = self.chain.high
-        self.joints_mean = (self.joints_lower + self.joints_upper) / 2
-        self.joints_range = self.joints_mean - self.joints_lower
+        self.joint_angles = joint_angles
+        self.joint_lowers = self.chain.low
+        self.joint_uppers = self.chain.high
+        self.joint_means = (self.joint_lowers + self.joint_uppers) / 2
+        self.joint_ranges = self.joint_means - self.joint_lowers
         self.joint_names = self.chain.get_joint_parameter_names()
         self.n_dofs = self.chain.n_joints  # only used here for robot hand with no mimic joint
 
@@ -93,7 +100,6 @@ class MJLeapHandLayer(torch.nn.Module):
         To create needed assets for the first running.
         Should run before first use.
         '''
-        theta = np.zeros((1, self.n_dofs), dtype=np.float32)
 
         # Hand meshes
         if False:
@@ -101,15 +107,15 @@ class MJLeapHandLayer(torch.nn.Module):
                 self.mj_model,
                 self.mjw_model, self.mjw_data,
                 body_names=self.hand_body_names,
-                hand_base_pose=torch.from_numpy(IDENTITY_POSE),
-                hand_qpos=torch.from_numpy(theta),
+                hand_base_pose=torch.from_numpy(self.hand_base_pose),
+                hand_qpos=torch.from_numpy(self.joint_angles),
                 is_collision=self.use_collision_mesh,
                 device=self.device
             )
-        self.ori_hand_meshes = mj_geoms_to_trimeshes(self.mj_model, self.mj_data,
+        self.ori_hand_meshes = mj_get_body_trimeshes(self.mj_model, self.mj_data,
                                                      body_names=self.hand_body_names,
-                                                     hand_base_pose=IDENTITY_POSE,
-                                                     hand_qpos=theta,
+                                                     base_pose=self.hand_base_pose,
+                                                     qpos=self.joint_angles,
                                                      is_collision=self.use_collision_mesh)
         hand_meshes = {_: m[0] for _, m in self.ori_hand_meshes.items()}
         # trimesh.Scene([self.ori_hand_meshes]).show()
@@ -152,12 +158,12 @@ class MJLeapHandLayer(torch.nn.Module):
     def compute_abnormal_joint_loss(self, theta):
         loss_1 = -torch.clamp(theta[:, 5] - theta[:, 1], -1, 0) * 10
         loss_2 = -torch.clamp(theta[:, 9] - theta[:, 5], -1, 0) * 10
-        loss_3 = torch.abs(theta[:, [2, 3, 6, 7, 10, 11]] - self.joints_mean[[2, 3, 6, 7, 10, 11]].unsqueeze(0)).sum(
+        loss_3 = torch.abs(theta[:, [2, 3, 6, 7, 10, 11]] - self.joint_means[[2, 3, 6, 7, 10, 11]].unsqueeze(0)).sum(
             dim=-1) * 2
         return loss_1 + loss_2 + loss_3
 
     def get_init_angle(self):
-        init_angle = (self.joints_upper - self.joints_lower) / 6.0 + self.joints_lower
+        init_angle = (self.joint_uppers - self.joint_lowers) / 6.0 + self.joint_lowers
         init_angle[1] = -0.1
         init_angle[5] = 0.0
         init_angle[9] = 0.1
@@ -194,9 +200,9 @@ class MJLeapHandLayer(torch.nn.Module):
         return hand_meshes
 
     def get_forward_vertices_mujoco(self, hand_base_pose, hand_qpos):
-        cur_hand_meshes = mj_geoms_to_trimeshes(self.mj_model, self.mj_data,
+        cur_hand_meshes = mj_get_body_trimeshes(self.mj_model, self.mj_data,
                                                 body_names=self.hand_body_names,
-                                                hand_base_pose=hand_base_pose, hand_qpos=hand_qpos,
+                                                base_pose=hand_base_pose, qpos=hand_qpos,
                                                 is_collision=self.use_collision_mesh,
                                                 body_trimeshes=self.ori_hand_meshes)
         hand_mesh_all = trimesh.util.concatenate([m[0] for _, m in cur_hand_meshes.items()])

@@ -35,13 +35,12 @@ from judo.simulation.mj_simulation import MJSimulation
 from judo.simulation.nt_simulation import NTSimulation
 
 # hand optimizer
-from hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams, USE_MUJOCO
+from hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams
 from object_utils import ObjectData
+from rot6d import compute_rotation_ortho6d_from_matrix
 
 RECORD_TIME = 300
 OBJ_NAME = PandaLeap.OBJECT_NAMES[0]
-HAND_URDF_PATH = f"{PACKAGE_ROOT}/hand_layers/assets/leap_hand_right.urdf"
-USE_XML_HAND = True
 
 
 def set_seed(seed):
@@ -83,11 +82,15 @@ class UniGraspApp:
         full_hand_base_name = PandaLeap.hand_item_full_name(PandaLeap.HAND_BASE_NAME)
         self.hand_base = self.mj_data.body(full_hand_base_name)
         self.obj = self.mj_data.body(OBJ_NAME)
+        mj.mj_forward(self.mj_model, self.mj_data)
 
         # 2- Controllers
         # Arm controller
         self.arm_qpos_ids = mj_get_joints_qids(self.mj_model, PandaLeap.ARM_JOINTS_NAMES, is_qpos=True)
         self.arm_ctrl_ids = mj_get_actuators_id_list(self.mj_model, PandaLeap.ARM_ACTS_NAMES)
+        self.hand_qpos_ids = mj_get_joints_qids(self.mj_model,
+                                                PandaLeap.hand_items_full_names(PandaLeap.HAND_JOINTS_NAMES),
+                                                is_qpos=True)
         self.hand_ctrl_ids = mj_get_actuators_id_list(self.mj_model,
                                                       PandaLeap.hand_items_full_names(PandaLeap.HAND_ACTS_NAMES))
         self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, PandaLeap, self.qpos_home,
@@ -97,7 +100,7 @@ class UniGraspApp:
 
         # Hand controller
         set_seed(0)
-        self.opt_params = HandOptimizerParams(batches_num=1, distance_lower=0.05, distance_upper=0.15,
+        self.opt_params = HandOptimizerParams(n_batches=1, distance_lower=0.05, distance_upper=0.15,
                                               jitter_strength=0.1,
                                               joint_limit_lower=-np.pi / 6,
                                               joint_limit_upper=np.pi / 6)
@@ -107,9 +110,13 @@ class UniGraspApp:
 
         self.hand_opt = HandOptimizer(device=torch_device,
                                       object_data=self.object_data,
-                                      hand_params=HandParams(hand_model_name='leap_hand',
-                                                             xml_path=HAND_XML_PATH if USE_XML_HAND else None,
-                                                             urdf_path=HAND_URDF_PATH if not USE_XML_HAND else None),
+                                      hand_params=HandParams.get(hand_model_name='leap_hand',
+                                                                 xml_path=HAND_XML_PATH,
+                                                                 joint_angles=np.array(
+                                                                     self.mj_data.qpos[self.hand_qpos_ids],
+                                                                     dtype=np.float32),
+                                                                 hand_pos=self.hand_base.xpos,
+                                                                 hand_quat=self.hand_base.xquat),
                                       opt_params=self.opt_params)
 
     @property
@@ -181,29 +188,30 @@ class UniGraspApp:
 
         # start = time.perf_counter()
         # Hand plan
-        hand_batches_num = self.hand_opt.batches_num
+        hand_batches_num = self.hand_opt.n_batches
         assert hand_batches_num == 1
         cur_hand_pos = self.hand_base.xpos
         cur_hand_quat = self.hand_base.xquat
-        next_wrist_rot = torch.tensor(cur_hand_quat).repeat(hand_batches_num, 1) if self.hand_opt.use_quat \
-            else roma.unitquat_to_rotmat(torch.tensor(cur_hand_quat)).repeat(hand_batches_num, 1, 1)
-        next_grasp = self.hand_opt.step_optimize(new_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
-                                                 new_wrist_rot=next_wrist_rot,
-                                                 new_mesh_poses=[np.concatenate([self.obj.xpos, self.obj.xquat])])
-        next_grasp_pose = np.concatenate([next_grasp.wrist_pos.squeeze(), next_grasp.wrist_quat.squeeze()])
-        self.mj_data.ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles.squeeze()
+        cur_wrist_rot = torch.tensor(cur_hand_quat).repeat(hand_batches_num, 1) if self.hand_opt.use_quat \
+            else (roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(torch.tensor(cur_hand_quat)))
+                  .repeat(hand_batches_num, 1, 1))
+        next_grasp = self.hand_opt.step_optimize(cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
+                                                 cur_wrist_rot=cur_wrist_rot,
+                                                 cur_mesh_poses=[np.concatenate([self.obj.xpos, self.obj.xquat])])
+        self.mj_data.ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles
         mj_move_mocap(self.mj_model, self.mj_data, PandaLeap.EE_TARGET_MOCAP_NAME,
-                      pos=next_grasp_pose[:3], quat=next_grasp_pose[3:])
+                      pos=next_grasp.wrist_pos, quat=next_grasp.wrist_quat)
 
         # Arm plan
+        next_grasp_pose = next_grasp.wrist_pose
         q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=True)
         if q is None:
             q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=False)
         self.mj_data.ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
 
         # Visualize
-        vis_grasp = False
-        if vis_grasp:
+        visualize_grasp = False
+        if visualize_grasp:
             self.hand_opt.visualize_grasp(next_grasp, self.object_data.meshes)
 
         # Traces

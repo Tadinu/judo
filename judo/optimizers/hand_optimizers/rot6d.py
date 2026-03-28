@@ -3,6 +3,10 @@
 import torch
 
 
+def compute_rotation_ortho6d_from_matrix(rot_mat):
+    return rot_mat.transpose(1, 2)[:, :2].reshape(-1, 6)
+
+
 def compute_rotation_matrix_from_ortho6d(poses):
     """
     Code from

@@ -39,7 +39,7 @@ if __name__ == "__main__":
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     hand_model_name = 'leap_hand'
-    opt_params = HandOptimizerParams(batches_num=BATCHES_NUM, distance_lower=0.05, distance_upper=0.15,
+    opt_params = HandOptimizerParams(n_batches=BATCHES_NUM, distance_lower=0.05, distance_upper=0.15,
                                      jitter_strength=0.1,
                                      joint_limit_lower=-np.pi / 6,
                                      joint_limit_upper=np.pi / 6)
@@ -68,9 +68,9 @@ if __name__ == "__main__":
         if False:
             new_wrist_rot = torch.tensor([0.71, 0.71, 0, 0]).repeat(BATCHES_NUM, 1) if hand_opt.use_quat \
                 else roma.unitquat_to_rotmat(torch.tensor([0.71, 0.71, 0, 0])).repeat(BATCHES_NUM, 1, 1)
-            hand_opt.step_optimize(new_wrist_pos=np.tile([0, 0, 1], (BATCHES_NUM, 1)),
-                                   new_wrist_rot=new_wrist_rot,
-                                   new_mesh_poses=[np.array([0, 0, 1, 0.71, 0.71, 0, 0])])
+            hand_opt.step_optimize(cur_wrist_pos=np.tile([0, 0, 1], (BATCHES_NUM, 1)),
+                                   cur_wrist_rot=new_wrist_rot,
+                                   cur_mesh_poses=[np.array([0, 0, 1, 0.71, 0.71, 0, 0])])
         grasp = hand_opt.best_grasp_configuration()
 
         # Visualize
