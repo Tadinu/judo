@@ -3,7 +3,7 @@ https://github.com/otaheri/chamfer_distance.git
 """
 
 import torch
-import chamfer_distance as chd
+import judo.optimizers.hand_optimizers.chamfer_distance as chd
 
 
 def point2point_signed(
@@ -36,7 +36,6 @@ def point2point_signed(
         use_cosine_collision = [True, True]
     elif use_cosine_collision == False:
         use_cosine_collision = [False, False]
-
 
     N, P1, D = x.shape
     P2 = y.shape[1]
@@ -80,8 +79,6 @@ def point2point_signed(
     return y2x_signed, x2y_signed, yidx_near, xidx_near, y2x, x2y
 
 
-
-
 def point2point_nosigned(
         x,
         y,
@@ -112,7 +109,6 @@ def point2point_nosigned(
         use_cosine_collision = [True, True]
     elif use_cosine_collision == False:
         use_cosine_collision = [False, False]
-
 
     N, P1, D = x.shape
     P2 = y.shape[1]

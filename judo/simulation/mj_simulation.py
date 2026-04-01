@@ -32,6 +32,7 @@ class MJSimulation(Simulation):
             init_task: str = "cylinder_push",
             num_rollout_worlds: int = 1,
             task_registration_cfg: Optional[DictConfig] = None,
+            kinematics_mode: bool = False,
             headless: bool = False,
             record_video: bool = False,
             width: int = 720,
@@ -40,6 +41,7 @@ class MJSimulation(Simulation):
         """Initialize the simulation node."""
         super().__init__(init_task=init_task, num_rollout_worlds=num_rollout_worlds,
                          task_registration_cfg=task_registration_cfg,
+                         kinematics_mode=kinematics_mode,
                          headless=headless)
         if headless:
             os.environ["MUJOCO_GL"] = "egl"
@@ -72,7 +74,14 @@ class MJSimulation(Simulation):
 
     def _full_step(self):
         self.task.pre_sim_step()
-        mj_step(self.task.mj_sim_model, self.task.mj_data)
+        if self.kinematics_mode:
+            model, data = self.task.mj_sim_model, self.task.mj_data
+            mj.mj_fwdPosition(model, data)
+            mj.mj_comPos(model, data)
+            mj.mj_sensorPos(model, data)
+            # mj.mj_forward(model, data)
+        else:
+            mj_step(self.task.mj_sim_model, self.task.mj_data)
         self.task.post_sim_step()
 
         # Record frames

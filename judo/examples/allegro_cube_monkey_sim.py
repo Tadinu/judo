@@ -63,7 +63,7 @@ class AllegroCubeMonkeySim(NTSimulation):
         super().__init__(init_task=AllegroCubeRotateConfig().task_name,
                          is_monkey_sim=True,
                          num_rollout_worlds=num_instances,
-                         kernel_set_joint_targets=wp_kernel_move_hand_wrist,
+                         wp_kernel_set_joint_targets=wp_kernel_move_hand_wrist,
                          task_registration_cfg=task_registration_cfg)
 
     def setup_joint_targets(self):

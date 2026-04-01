@@ -1,11 +1,24 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 import importlib
-
+import random
 from omegaconf import DictConfig
+
+import torch
+import numpy as np
 
 from judo.optimizers import register_optimizer
 from judo.tasks import register_task
+
+
+def set_seed(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+
+    # When running on the CuDNN backend, two further options must be set
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 
 def get_class_from_string(class_path: str) -> type:

@@ -1,10 +1,21 @@
 import time
+import random
 from typing import Callable, Optional
 from threading import Lock
 from omegaconf import DictConfig
 from loop_rate_limiters import RateLimiter
 
+import numpy as np
 import warp as wp
+
+import torch
+
+torch.set_default_device(torch.device('cuda'))
+torch.set_default_dtype(torch.float32)
+TORCH_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+import roma
+
 import mujoco as mj
 from mujoco import viewer
 
@@ -13,13 +24,20 @@ from judo import BackendType
 from judo.config import get_override_config
 from judo.simulation.mj_simulation import MJSimulation
 from judo.simulation.nt_simulation import NTSimulation
-from judo.controller import Controller, make_controller
+from judo.controller import MPController, make_controller
 from judo.utils.fabrics_utils import FabricsAgent, FABRICS_MPC_TYPE
 from judo.app.structs import SplineData
 from judo.app.utils import get_class_from_string
 
 # mjmanip
+from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
+from mjmanip.utils import mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene, mj_draw_spheres
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
+
+# hand optimizer
+from judo.optimizers.hand_optimizers.hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams
+from judo.optimizers.hand_optimizers.object_utils import ObjectData
+from judo.app.utils import set_seed
 
 RECORD_TIME = 300
 
@@ -28,14 +46,17 @@ class MPCApp:
     def __init__(self, task_name: str,
                  optimizer_name: str,
                  sim_backend_type: BackendType,
-                 kernel_set_joint_targets: Optional[Callable] = None,
+                 robot_class: Optional[ArmHand] = None,
+                 wp_kernel_set_joint_targets: Optional[Callable] = None,
                  task_registration_cfg: Optional[DictConfig] = None,
                  optimizer_registration_cfg: Optional[DictConfig] = None,
                  fabric_cfg: Optional[ArmHandPoseFabricConfig] = None,
+                 kinematics_mode: bool = False,
                  headless: bool = False) -> None:
         """Initialize the simulation node."""
         self.task_name = task_name
         self.step_cnt = 0
+        self.robot_class: ArmHand = robot_class
 
         # 1- Sim
         optimizer_config_cls = get_class_from_string(optimizer_registration_cfg[optimizer_name].config)
@@ -46,12 +67,14 @@ class MPCApp:
                                         num_rollout_worlds=num_rollouts,
                                         task_registration_cfg=task_registration_cfg,
                                         headless=headless,
+                                        kinematics_mode=kinematics_mode,
                                         record_video=headless)
             case BackendType.NEWTON:
                 self.sim = NTSimulation(init_task=task_name,
                                         num_substeps=8,  # MPC
                                         num_rollout_worlds=num_rollouts,
-                                        kernel_set_joint_targets=kernel_set_joint_targets,
+                                        wp_kernel_set_joint_targets=wp_kernel_set_joint_targets,
+                                        kinematics_mode=kinematics_mode,
                                         task_registration_cfg=task_registration_cfg)
 
         # 2- Fabrics computation agent
@@ -72,7 +95,8 @@ class MPCApp:
         # Whether the controller runs alongside the sim
         self.synchronous_controller = True
         if self.synchronous_controller:
-            self.sim.controller = self.controller = make_controller(
+            # MPC
+            self.sim.mpcontroller = self.mpcontroller = make_controller(
                 sim=self.sim,
                 init_task=self.sim.task,
                 init_optimizer=optimizer_name,
@@ -80,11 +104,65 @@ class MPCApp:
                 optimizer_registration_cfg=optimizer_registration_cfg,
                 rollout_backend=sim_backend_type
             )
-            print("CONTROLLER NUM_TIMESTEPS", self.controller.num_timesteps)
+            print("CONTROLLER NUM_TIMESTEPS", self.mpcontroller.num_timesteps)
             self.fetch_nominal_control_spline()
             self.write_state_to_controller()
             # Only for task update if from another thread
             self.lock = Lock()
+
+            # MUJOCO-Specific controllers
+            if self.is_mujoco and robot_class:
+                OBJ_NAME = robot_class.OBJECT_NAMES[0]
+                # Arm controller
+                self.mj_model = self.sim.task.mj_sim_model
+                self.mj_data = self.sim.task.mj_data
+                self.qpos_home: Optional[np.ndarray] = robot_class.ARM_HOME_QPOS + robot_class.HAND_HOME_QPOS + \
+                                                       robot_class.OBJECT_INIT_POSES[OBJ_NAME].tolist()
+                self.arm_qpos_ids = mj_get_joints_qids(self.mj_model, robot_class.ARM_JOINTS_NAMES, is_qpos=True)
+                self.arm_ctrl_ids = mj_get_actuators_id_list(self.mj_model, robot_class.ARM_ACTS_NAMES)
+                self.hand_qpos_ids = mj_get_joints_qids(self.mj_model,
+                                                        robot_class.hand_items_full_names(
+                                                            robot_class.HAND_JOINTS_NAMES),
+                                                        is_qpos=True)
+                self.hand_ctrl_ids = mj_get_actuators_id_list(self.mj_model,
+                                                              robot_class.hand_items_full_names(
+                                                                  robot_class.HAND_ACTS_NAMES))
+                self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, robot_class, self.qpos_home,
+                                             ee_name=robot_class.hand_item_full_name(robot_class.HAND_BASE_NAME),
+                                             ee_obj_type='body')
+                self.diff_ik.DT = self.mj_model.opt.timestep
+                self.diff_ik.init()
+
+                # Hand controller
+                set_seed(0)
+                self.opt_params = HandOptimizerParams(n_batches=1, distance_lower=0.05, distance_upper=0.15,
+                                                      jitter_strength=0.1,
+                                                      joint_limit_lower=-np.pi / 6,
+                                                      joint_limit_upper=np.pi / 6)
+
+                self.obj = self.mj_data.body(OBJ_NAME)
+                self.object_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data,
+                                                                 body_names=[self.obj.name], device=TORCH_DEVICE)
+
+                self.base_platform = self.mj_data.body(robot_class.BASE_PLATFORM_NAME)
+                self.base_plate_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data,
+                                                                     body_names=[self.base_platform.name],
+                                                                     device=TORCH_DEVICE)
+
+                self.hand_base = self.mj_data.body(
+                    self.robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME))
+                self.hand_opt = HandOptimizer(
+                    hand_params=HandParams.get(hand_model_name=self.robot_class.HAND_MODEL_NAME,
+                                               xml_path=self.robot_class.HAND_XML_PATH,
+                                               joint_angles=np.array(
+                                                   self.mj_data.qpos[self.hand_qpos_ids],
+                                                   dtype=np.float32),
+                                               hand_pos=self.hand_base.xpos.copy(),
+                                               hand_quat=self.hand_base.xquat.copy()),
+                    object_data=self.object_data,
+                    obstacle_data=self.base_plate_data,
+                    opt_params=self.opt_params,
+                    device=TORCH_DEVICE)
 
     @property
     def is_mujoco(self):
@@ -163,7 +241,7 @@ class MPCApp:
             self.plan()
 
             # Force controller to run at fixed rate specified by control_freq.
-            sleep_dt = 1 / self.controller.controller_cfg.control_freq - (time.time() - start_time)
+            sleep_dt = 1 / self.mpcontroller.controller_cfg.control_freq - (time.time() - start_time)
             time.sleep(max(0, sleep_dt))
 
     def plan(self) -> None:
@@ -171,15 +249,64 @@ class MPCApp:
         if self.sim.paused:
             return
 
-        start = time.perf_counter()
+        # start = time.perf_counter()
         # Rollout controller here-in!
-        self.controller.update_action()
-        end = time.perf_counter()
+        if self.sim.task.should_stop_mpc():
+            self.plan_arm_hand()
+        else:
+            self.mpcontroller.update_action()
+            if self.is_mujoco:
+                mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
+                              pos=self.hand_base.xpos, quat=self.hand_base.xquat)
+                if self.hand_opt:
+                    self.hand_opt.update_opt_wrist_pose(wrist_pos=torch.from_numpy(self.hand_base.xpos).unsqueeze(0)
+                                                        .float().to(TORCH_DEVICE),
+                                                        wrist_rot=torch.from_numpy(self.hand_base.xquat)
+                                                        .unsqueeze(0).float().to(TORCH_DEVICE))
+        # end = time.perf_counter()
 
         # print("plan_time", end - start)
         self.fetch_nominal_control_spline()
         # self.sim.nominal_action = self.controller.action(self.sim.sim_backend.sim_time)
         # print("best action", self.sim.optimal_action)
+
+    def plan_arm_hand(self):
+        # Hand plan
+        hand_batches_num = self.hand_opt.n_batches
+        assert hand_batches_num == 1
+        cur_hand_pos = self.hand_base.xpos.copy()
+        cur_hand_quat = self.hand_base.xquat.copy()
+        cur_wrist_rot = torch.tensor(cur_hand_quat).repeat(hand_batches_num, 1) if self.hand_opt.use_quat \
+            else (roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(torch.tensor(cur_hand_quat)))
+                  .repeat(hand_batches_num, 1, 1))
+        next_grasp = self.hand_opt.step_optimize(cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
+                                                 cur_wrist_rot=cur_wrist_rot,
+                                                 cur_obj_mesh_poses=[np.concatenate([self.obj.xpos, self.obj.xquat])],
+                                                 cur_obst_mesh_poses=[
+                                                     np.concatenate(
+                                                         [self.base_platform.xpos, self.base_platform.xquat])])
+        self.mj_data.ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles
+        mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
+                      pos=next_grasp.wrist_pos, quat=next_grasp.wrist_quat)
+
+        # Arm plan
+        next_grasp_pose = next_grasp.wrist_pose
+        q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=True)
+        if q is None:
+            q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=False)
+        self.mj_data.ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
+
+        # Visualize
+        visualize_grasp = False
+        if visualize_grasp:
+            self.hand_opt.visualize_grasp(next_grasp, self.object_data.meshes)
+
+        # Traces
+        # Hand pcl
+        self.visualize_hand_pcl()
+
+        # Obj pcl
+        self.visualize_obj_pcl()
 
     def update_control(self, nominal_spline_data: SplineData) -> None:
         """Event handler for processing controls received from controller node."""
@@ -188,15 +315,15 @@ class MPCApp:
 
     def update_task(self, task_name: str) -> None:
         """Updates the task type."""
-        task_entry = self.controller.available_tasks.get(task_name)
+        task_entry = self.mpcontroller.available_tasks.get(task_name)
         if task_entry is not None:
             self.task_name = task_name
             task_cls, _ = task_entry
             with self.lock:
                 task = task_cls(self.sim)
-                optimizer = self.controller.optimizer_cls(self.controller.optimizer_config_cls(), task.nu)
-                self.controller = Controller(
-                    controller_config=self.controller.controller_cfg,
+                optimizer = self.mpcontroller.optimizer_cls(self.mpcontroller.optimizer_config_cls(), task.nu)
+                self.mpcontroller = MPController(
+                    controller_config=self.mpcontroller.controller_cfg,
                     task=task,
                     optimizer=optimizer,
                 )
@@ -206,20 +333,20 @@ class MPCApp:
 
     def update_optimizer(self, optimizer_name: str) -> None:
         """Updates the optimizer type."""
-        optimizer_entry = self.controller.available_optimizers.get(optimizer_name)
+        optimizer_entry = self.mpcontroller.available_optimizers.get(optimizer_name)
         if optimizer_entry is not None:
             optimizer_cls, optimizer_config_cls = optimizer_entry
             optimizer_config = optimizer_config_cls()
-            optimizer = optimizer_cls(optimizer_config, self.controller.task.nu)
+            optimizer = optimizer_cls(optimizer_config, self.mpcontroller.task.nu)
             with self.lock:
-                self.controller.optimizer = optimizer
+                self.mpcontroller.optimizer = optimizer
         else:
             raise ValueError(f"Optimizer {optimizer_name} not found in optimizer registry.")
 
     def reset_task(self, event: dict) -> None:
         """Resets the task."""
         with self.lock:
-            self.controller.reset()
+            self.mpcontroller.reset()
             self.fetch_nominal_control_spline()
 
     def toggle_paused_status(self) -> None:
@@ -227,13 +354,28 @@ class MPCApp:
         self.sim.paused = not self.sim.paused
 
     def write_state_to_controller(self) -> None:
-        self.controller.update_state(self.sim.sim_state)
+        self.mpcontroller.update_state(self.sim.sim_state)
 
     def fetch_nominal_control_spline(self) -> None:
         """Util that publishes the current controller spline."""
         # Set sim's control spline from [self.controller]
-        self.update_control(self.controller.nominal_spline_data)
+        self.update_control(self.mpcontroller.nominal_spline_data)
 
         # Visualize traces
-        if self.controller.traces is not None and len(self.controller.traces) > 0:
+        if self.mpcontroller.traces is not None and len(self.mpcontroller.traces) > 0:
             pass
+
+    def visualize_hand_pcl(self):
+        if self.is_mujoco:
+            mj_draw_spheres(self.sim.mj_viewer.user_scn,
+                            positions=self.hand_opt.hand_verts.tolist(),
+                            sizes=len(self.hand_opt.hand_verts) * [[0.005]],
+                            rgbas=len(self.hand_opt.hand_verts) * [[1, 1, 0, 1]])
+
+    def visualize_obj_pcl(self):
+        if self.is_mujoco:
+            obj_points = self.hand_opt.object_data.all_points.detach().cpu().numpy().tolist()
+            mj_draw_spheres(self.sim.mj_viewer.user_scn,
+                            positions=obj_points,
+                            sizes=len(obj_points) * [[0.005]],
+                            rgbas=len(obj_points) * [[0, 1, 0, 1]])

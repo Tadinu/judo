@@ -8,7 +8,7 @@ from judo.config import set_config_overrides
 # for the controller
 set_config_overrides(
     "cylinder_push",  # task name in the GUI
-    ControllerConfig,  # class to supply overrides for
+    MPControllerConfig,  # class to supply overrides for
     {
         "horizon": 1.0,
         "spline_order": "zero",

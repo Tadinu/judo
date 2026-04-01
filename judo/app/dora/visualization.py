@@ -11,7 +11,7 @@ from viser import GuiFolderHandle, GuiImageHandle, GuiInputHandle, IcosphereHand
 
 from judo.app.structs import MujocoState
 from judo.visualizers.visualizer import Visualizer
-from judo.controller.controller import SplineType
+from judo.controller.mpcontroller import SplineType
 
 ElementType = GuiImageHandle | GuiInputHandle | GuiFolderHandle | MeshHandle | IcosphereHandle
 

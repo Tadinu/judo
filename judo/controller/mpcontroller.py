@@ -48,7 +48,7 @@ class SplineType(enum.Enum):
 @slider("horizon", 0.1, 10.0, bounded=True)
 @slider("control_freq", 0.25, 50.0)
 @dataclass
-class ControllerConfig(OverridableConfig):
+class MPControllerConfig(OverridableConfig):
     """Base controller config."""
 
     horizon: float = 1.0
@@ -59,12 +59,12 @@ class ControllerConfig(OverridableConfig):
     action_normalizer: str = NormalizerType.NONE.name
 
 
-class Controller:
+class MPController:
     """The controller object."""
 
     def __init__(
             self,
-            controller_config: ControllerConfig,
+            controller_config: MPControllerConfig,
             task: Task,
             optimizer: Optimizer,
             rollout_backend: BackendType = BackendType.MUJOCO,
@@ -248,12 +248,12 @@ class Controller:
         self.task.time = value
 
     @property
-    def controller_cfg(self) -> ControllerConfig:
+    def controller_cfg(self) -> MPControllerConfig:
         """Returns the controller config."""
         return self._controller_cfg
 
     @controller_cfg.setter
-    def controller_cfg(self, controller_cfg: ControllerConfig) -> None:
+    def controller_cfg(self, controller_cfg: MPControllerConfig) -> None:
         """Sets the controller config."""
         self._controller_cfg = controller_cfg
         self.action_normalizer = self._init_action_normalizer()
@@ -510,7 +510,7 @@ def make_controller(
         task_registration_cfg: Optional[DictConfig] = None,
         optimizer_registration_cfg: Optional[DictConfig] = None,
         rollout_backend: BackendType = BackendType.MUJOCO,
-) -> Controller:
+) -> MPController:
     """Make a controller."""
     available_optimizers = get_registered_optimizers()
     available_tasks = get_registered_tasks()
@@ -538,11 +538,11 @@ def make_controller(
     optimizer = optimizer_cls(optimizer_config_cls(), task.nu, override_task_name=task_name)
     print("Optimizer:", optimizer.config)
 
-    controller_cfg = ControllerConfig()
+    controller_cfg = MPControllerConfig()
     controller_cfg.set_override(task_name)
     print("Controller:", controller_cfg)
 
-    return Controller(
+    return MPController(
         controller_config=controller_cfg,
         task=task,
         optimizer=optimizer,

@@ -8,21 +8,23 @@ import mujoco as mj
 
 # mjmanip
 from mjmanip import DEFAULT_SCENE_MJX_XML_PATH, DEFAULT_SCENE_XML_PATH
-from mjmanip.robot.arm_hand import ArmHandDiffIK
-# NOTE: LeapMjx hand is more robust than Leap, so use [panda_leap_mjx] for now!
-from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_XML_PATH, HAND_XML_PATH
+from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
+from mjmanip.utils import IDENTITY_WXYZ, mj_body_free_joint_name, mj_get_site_pose
 
-if PandaLeapMjx:
-    PandaLeapMjx.NINSTANCES = 1
+# NOTE: LeapMjx hand is more robust than Leap, so use [panda_leap_mjx] for now!
+USE_LEAP_MJX = False
+if USE_LEAP_MJX:
+    from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_XML_PATH, HAND_XML_PATH
+
     PANDA_LEAP = PandaLeapMjx
     PANDA_LEAP_ENV = PandaLeapMjxEnv
 else:
-    from mjmanip.robot.panda_leap import PandaLeapEnv, PandaLeap, ARM_XML_PATH
+    from mjmanip.robot.panda_leap import PandaLeapEnv, PandaLeap, ARM_XML_PATH, HAND_XML_PATH
 
     PANDA_LEAP = PandaLeap
     PANDA_LEAP_ENV = PandaLeapEnv
-
-from mjmanip.utils import mj_body_free_joint_name, mj_get_site_pose
+PANDA_LEAP.NINSTANCES = 1
+PANDA_LEAP.HAND_XML_PATH = HAND_XML_PATH
 
 # judo
 from judo import BackendType
@@ -48,9 +50,7 @@ class PandaLeapPickConfig(TaskConfig):
 
     task_name: str = "panda_leap_pick"
     sim_backend: str = BackendType.MUJOCO.name
-
-    xml_path = None
-    sim_xml_path = None
+    robot_class: ArmHand = PANDA_LEAP
     qpos_home: Optional[np.ndarray] = field(default_factory=
                                             lambda: PANDA_LEAP.ARM_HOME_QPOS +
                                                     PANDA_LEAP.HAND_HOME_QPOS +
@@ -62,9 +62,6 @@ class PandaLeapPickConfig(TaskConfig):
     goal_quat: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
     w_pos: float = 0.1
     w_rot: float = 50
-
-    def __post_init__(self):
-        self.joint_names = []
 
 
 class PandaLeapPick(Task[PandaLeapPickConfig]):
@@ -122,13 +119,14 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             for arm_geom in PANDA_LEAP.ARM_GEOMS_NAMES
         ]
 
-        self.reach_threshold_squared = 0.01
-        self.orientation_threshold = 0.0001
+        self.mpc_threshold = 0.03
+        self.reach_threshold_squared = 0.015
+        self.orientation_threshold = 0.01
         self.last_obj_distance_to_goal = 0.
 
     def mj_compose_spec(self) -> Optional[mj.MjSpec]:
         self.robot_env = PANDA_LEAP_ENV(
-            world_scene_xml=DEFAULT_SCENE_MJX_XML_PATH if PandaLeapMjxEnv else DEFAULT_SCENE_XML_PATH,
+            world_scene_xml=DEFAULT_SCENE_MJX_XML_PATH if USE_LEAP_MJX else DEFAULT_SCENE_XML_PATH,
             arm_xml=ARM_XML_PATH,
             hand_xml=HAND_XML_PATH)
         spec = self.robot_env.construct_main_spec(self.robot_env.meshdir, self.robot_env.texturedir)
@@ -164,8 +162,12 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             obj_reaching_err = cur_sensor_data[self.obj_pos_distance_to_grasp_sensor_idx:
                                                self.obj_pos_distance_to_grasp_sensor_idx + 3]
             # print("Cur grasp<->obj dist", np.square(obj_reaching_err).sum())
-            if np.square(obj_reaching_err).sum() > self.reach_threshold_squared:
-                return ObjectRelocatingPhase.REACHING_OBJ
+            goal_pos_err = np.square(obj_reaching_err).sum()
+            if goal_pos_err > self.reach_threshold_squared:
+                if goal_pos_err < self.mpc_threshold:
+                    return ObjectRelocatingPhase.GRASPING_OBJ
+                else:
+                    return ObjectRelocatingPhase.REACHING_OBJ
         else:
             cur_obj_position = self.mj_data.body(self.OBJ_NAME).xpos
             cur_grasp_site_position = self.mj_data.site(self.grasp_site_name).xpos
@@ -176,13 +178,13 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
 
         # Phase 2: Orientating Obj/Bringing Obj to Goal
         obj_orientation_err = cur_sensor_data[self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
-        goal_err_quat = np.array([1.0, 0.0, 0.0, 0.0])
-        if np.square(np_quat_diff_so3(obj_orientation_err, goal_err_quat)).sum() > self.orientation_threshold ** 2:
+        goal_quat_err = np.square(np_quat_diff_so3(obj_orientation_err, IDENTITY_WXYZ)).sum()
+        if goal_quat_err > self.orientation_threshold:
             obj_distance_to_goal = np.square(cur_sensor_data[self.obj_pos_distance_to_goal_sensor_idx:
                                                              self.obj_pos_distance_to_goal_sensor_idx + 3]).sum()
-            if self.last_obj_distance_to_goal > obj_distance_to_goal:
+            if obj_distance_to_goal < self.last_obj_distance_to_goal:
                 self.last_obj_distance_to_goal = obj_distance_to_goal
-                return ObjectRelocatingPhase.ORIENTATING_OBJ
+            return ObjectRelocatingPhase.ORIENTATING_OBJ
 
         return ObjectRelocatingPhase.BRINGING_OBJ_TO_GOAL
 
@@ -246,6 +248,9 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             return total_reward
         else:
             return -reaching_cost - grasp_cost - grasp_direction_cost
+
+    def should_stop_mpc(self) -> bool:
+        return self.cur_phase == ObjectRelocatingPhase.GRASPING_OBJ
 
     def reset(self) -> None:
         """Resets the model to a default state with random goal."""

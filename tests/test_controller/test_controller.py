@@ -5,7 +5,7 @@ from typing import Callable
 import numpy as np
 
 from judo import BackendType
-from judo.controller import Controller, ControllerConfig, make_controller
+from judo.controller import MPController, MPControllerConfig, make_controller
 from judo.optimizers import Optimizer, OptimizerConfig, get_registered_optimizers
 from judo.tasks import CylinderPush
 
@@ -43,7 +43,7 @@ class MockOptimizerTrackNominalKnots(Optimizer):
 def test_max_opt_iters(temp_np_seed: Callable) -> None:
     """Tests that max_opt_iters correctly applies multiple iterations of optimization to a solution."""
 
-    def _setup_controller(max_opt_iters: int) -> tuple[MockOptimizerTrackNominalKnots, Controller]:
+    def _setup_controller(max_opt_iters: int) -> tuple[MockOptimizerTrackNominalKnots, MPController]:
         """Helper function to set up the controller."""
         task = CylinderPush()
         ps_config = OptimizerConfig()
@@ -53,7 +53,7 @@ def test_max_opt_iters(temp_np_seed: Callable) -> None:
             init_optimizer="cem",
             rollout_backend=BackendType.MUJOCO,
         )
-        controller.controller_cfg = ControllerConfig(max_opt_iters=max_opt_iters)
+        controller.controller_cfg = MPControllerConfig(max_opt_iters=max_opt_iters)
         controller.optimizer = opt
         return opt, controller
 
@@ -82,7 +82,7 @@ def test_max_opt_iters(temp_np_seed: Callable) -> None:
 def test_update_action() -> None:
     """Tests the update_action method with different optimizers."""
 
-    def _setup_controller(opt_cls: type[Optimizer], opt_cfg: OptimizerConfig) -> Controller:
+    def _setup_controller(opt_cls: type[Optimizer], opt_cfg: OptimizerConfig) -> MPController:
         """Helper function to set up the controller."""
         task = CylinderPush()
         opt = opt_cls(opt_cfg, task.nu)

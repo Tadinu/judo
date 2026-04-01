@@ -21,9 +21,20 @@ from judo import PACKAGE_ROOT
 from mjmanip.utils import IDENTITY_POSE, mj_get_geom_mesh_meta
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.pytorch3d_utils import mjw_geoms_to_pytorch3d_meshes
-from mjmanip.robot.leap_mjx import HAND_MODEL_DIR as LEAP_HAND_MODEL_DIR, LeapMjx
 
 LEAP_LAYER_HAND_ASSETS_DIR = f"{PACKAGE_ROOT}/hand_layers/leap_hand_layer/assets"
+
+# judo
+from judo.tasks.panda_leap_pick import USE_LEAP_MJX
+
+if USE_LEAP_MJX:
+    from mjmanip.robot.leap_mjx import HAND_MODEL_DIR as LEAP_HAND_MODEL_DIR, LeapMjx
+
+    LEAP = LeapMjx
+else:
+    from mjmanip.robot.leap import HAND_MODEL_DIR as LEAP_HAND_MODEL_DIR, Leap
+
+    LEAP = Leap
 
 
 # All lengths are in mm and rotations in radians
@@ -53,7 +64,7 @@ class MJLeapHandLayer(torch.nn.Module):
         self.hand_model_desc = hand_model_desc
         self.is_from_mjcf = hand_model_desc.endswith('.xml')
         self.mj_spec, self.chain = pk.build_chain_from_mjcf(hand_model_desc, device)
-        hand_base_spec = self.mj_spec.body(LeapMjx.HAND_BASE_NAME)
+        hand_base_spec = self.mj_spec.body(LEAP.HAND_BASE_NAME)
         hand_base_spec.pos = hand_base_pose[:3]
         hand_base_spec.quat = hand_base_pose[3:]
         self.hand_base_pose = hand_base_pose

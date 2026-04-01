@@ -11,7 +11,7 @@ The `Controller` class manages the relationship between the task and optimizer i
 class Controller:
     def __init__(
         self,
-        controller_config: ControllerConfig,
+        controller_config: MPControllerConfig,
         task: Task,
         task_config: TaskConfig,
         optimizer: Optimizer,

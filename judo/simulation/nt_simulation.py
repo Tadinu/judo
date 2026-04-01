@@ -27,20 +27,23 @@ class NTSimulation(Simulation):
             is_monkey_sim: bool = False,
             num_rollout_worlds: int = 1,
             num_substeps: int = 8,
-            kernel_set_joint_targets: Optional[Callable] = None,
+            wp_kernel_set_joint_targets: Optional[Callable] = None,
+            kinematics_mode: bool = False,
             task_registration_cfg: Optional[DictConfig] = None
     ) -> None:
         """Initialize the simulation node."""
         super().__init__(init_task=init_task, num_rollout_worlds=num_rollout_worlds,
-                         task_registration_cfg=task_registration_cfg)
+                         task_registration_cfg=task_registration_cfg,
+                         kinematics_mode=kinematics_mode)
 
         # Init newton backend
         self.sim_backend = NewtonBackend(self.task.config.joint_names,
                                          num_substeps=num_substeps,
                                          for_rollout=False,
-                                         headless=False)
-        if kernel_set_joint_targets:
-            self.sim_backend.kernel_set_joint_targets = kernel_set_joint_targets
+                                         headless=False,
+                                         kinematics_mode=kinematics_mode)
+        if wp_kernel_set_joint_targets:
+            self.sim_backend.wp_kernel_set_joint_targets = wp_kernel_set_joint_targets
 
         # Set backend's model as either sim or rollout model
         if is_monkey_sim:

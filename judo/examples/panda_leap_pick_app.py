@@ -18,7 +18,9 @@ class PandaLeapPickApp(MPCApp):
                  optimizer_registration_cfg: Optional[DictConfig] = None,
                  headless: bool = False) -> None:
         cfg = PandaLeapPickConfig()
+        cfg.robot_class.BASE_PLATFORM_NAME = "base_platform"
         super().__init__(task_name=cfg.task_name,
+                         robot_class=cfg.robot_class,
                          optimizer_name=list(optimizer_registration_cfg.keys())[0],
                          sim_backend_type=cfg.sim_backend_type(),
                          task_registration_cfg=task_registration_cfg,

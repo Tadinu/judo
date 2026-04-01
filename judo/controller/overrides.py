@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 from judo.config import set_config_overrides
-from judo.controller.controller import SplineType, ControllerConfig
+from judo.controller.mpcontroller import SplineType, MPControllerConfig
 from judo.utils.normalization import NormalizerType
 
 
@@ -9,7 +9,7 @@ def set_default_cylinder_push_overrides() -> None:
     """Sets the default task-specific controller config overrides for the cylinder push task."""
     set_config_overrides(
         "cylinder_push",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0,
             "spline_order": SplineType.ZERO.name,
@@ -21,7 +21,7 @@ def set_default_cartpole_overrides() -> None:
     """Sets the default task-specific controller config overrides for the cartpole task."""
     set_config_overrides(
         "cartpole",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0,
             "spline_order": SplineType.ZERO.name,
@@ -33,7 +33,7 @@ def set_default_leap_cube_overrides() -> None:
     """Sets the default task-specific controller config overrides for the leap cube task."""
     set_config_overrides(
         "leap_cube",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0,
             "spline_order": SplineType.CUBIC.name,
@@ -46,7 +46,7 @@ def set_default_leap_cube_down_overrides() -> None:
     """Sets the default task-specific controller config overrides for the leap cube down task."""
     set_config_overrides(
         "leap_cube_down",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0,
             "spline_order": SplineType.CUBIC.name,
@@ -59,7 +59,7 @@ def set_default_caltech_leap_cube_overrides() -> None:
     """Sets the default task-specific controller config overrides for the caltech leap cube task."""
     set_config_overrides(
         "caltech_leap_cube",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0,
             "spline_order": SplineType.CUBIC.name,
@@ -72,7 +72,7 @@ def set_default_fr3_pick_overrides() -> None:
     """Sets the default task-specific controller config overrides for the fr3 pick task."""
     set_config_overrides(
         "fr3_pick",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0,
             "spline_order": SplineType.LINEAR.name,
@@ -86,7 +86,7 @@ def set_default_allegro_cube_overrides() -> None:
     """Sets the default task-specific controller config overrides for the allegro cube task."""
     set_config_overrides(
         "allegro_cube",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0,
             "spline_order": SplineType.CUBIC.name,
@@ -100,7 +100,7 @@ def set_default_leap_freejoint_object_pick_overrides() -> None:
     from judo.utils.fabrics_utils import FabricsAgent
     set_config_overrides(
         "leap_freejoint_object_pick",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
                               FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 1.0,
@@ -116,7 +116,7 @@ def set_default_leap_object_rotate_overrides() -> None:
     from judo.utils.fabrics_utils import FabricsAgent
     set_config_overrides(
         "leap_object_rotate",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 0.1 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
                               FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 1.0,
@@ -132,7 +132,7 @@ def set_default_iiwa7_allegro_pick_overrides() -> None:
     from judo.utils.fabrics_utils import FabricsAgent
     set_config_overrides(
         "iiwa7_allegro_pick",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
                               FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 1.0,
@@ -148,7 +148,7 @@ def set_default_panda_leap_pick_overrides() -> None:
     from judo.utils.fabrics_utils import FabricsAgent
     set_config_overrides(
         "panda_leap_pick",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0 if FabricsAgent.USE_FINGER_EE_MULTI_TASK_SPACES or
                               FabricsAgent.USE_FINGER_EE_SINGLE_TASK_SPACE else 0.5,
@@ -164,7 +164,7 @@ def set_default_triple_pandas_rotate_overrides() -> None:
     from judo.utils.fabrics_utils import FabricsAgent
     set_config_overrides(
         "triple_pandas_rotate",
-        ControllerConfig,
+        MPControllerConfig,
         {
             "horizon": 1.0,
             "spline_order": SplineType.CUBIC.name,

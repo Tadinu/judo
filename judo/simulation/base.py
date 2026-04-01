@@ -13,7 +13,7 @@ from judo.utils.fabrics_utils import FabricsAgent
 from judo.app.utils import register_tasks_from_cfg
 
 if TYPE_CHECKING:
-    from judo.controller import Controller
+    from judo.controller.mpcontroller import MPController
 
 
 class Simulation(ABC):
@@ -30,9 +30,11 @@ class Simulation(ABC):
             init_task: str,
             num_rollout_worlds: int = 1,
             task_registration_cfg: Optional[DictConfig] = None,
+            kinematics_mode: bool = False,
             headless: bool = False
     ) -> None:
         """Initialize the simulation node."""
+        self.kinematics_mode = kinematics_mode
         self.headless = headless
         # handling custom task registration
         if task_registration_cfg is not None:
@@ -40,7 +42,7 @@ class Simulation(ABC):
 
         self.nominal_control_spline: Optional[Callable] = None
         self.paused = False
-        self.controller: Optional[Controller] = None
+        self.mpcontroller: Optional[MPController] = None
         self.task: Task = self._create_task(init_task, num_rollout_worlds)
         # Fabrics: Collision-aware Batched IK computation backend
         self.fabrics_agent: Optional[FabricsAgent] = None

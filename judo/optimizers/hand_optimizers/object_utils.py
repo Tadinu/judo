@@ -28,7 +28,7 @@ class ObjectData:
 
     @classmethod
     def get_meshes_data(cls, mesh_paths: list[str], voxel_size=0.006, scale=1.0, vis=False, watertight_process=True,
-                        device: torch.device = torch.device('cuda'),
+                        device: Union[torch.device, str] = 'cuda',
                         **kwargs) -> ObjectData:
         meshes = []
         points = []
@@ -57,7 +57,7 @@ class ObjectData:
                            body_names: Optional[list[str]] = None,
                            voxel_size: float = 0.006, scale: float = 1.0,
                            merging_meshes: bool = True,
-                           device: torch.device = torch.device('cuda')) -> ObjectData:
+                           device: Union[torch.device, str] = 'cuda') -> ObjectData:
         if isinstance(mj_model, str):
             assert mj_model.endswith('.xml')
             mj_model: mj.MjModel = mj.MjModel.from_xml_path(mj_model)

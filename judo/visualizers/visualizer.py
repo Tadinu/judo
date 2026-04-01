@@ -13,7 +13,7 @@ from viser import GuiFolderHandle, GuiImageHandle, GuiInputHandle, IcosphereHand
 from judo import PACKAGE_ROOT
 from judo.app.utils import register_optimizers_from_cfg, register_tasks_from_cfg
 from judo.config import set_config_overrides
-from judo.controller import ControllerConfig
+from judo.controller import MPControllerConfig
 from judo.gui import create_gui_elements
 from judo.optimizers import get_registered_optimizers
 from judo.tasks import get_registered_tasks
@@ -82,7 +82,7 @@ class Visualizer:
         # the controller parameter overrides
         for task_name in controller_override_cfg.keys():
             field_override_values = controller_override_cfg.get(task_name, {})
-            set_config_overrides(str(task_name), ControllerConfig, field_override_values)
+            set_config_overrides(str(task_name), MPControllerConfig, field_override_values)
 
     def register_optimizer_config_overrides(self, optimizer_override_cfg: DictConfig) -> None:
         """Register task-specific optimizer config overrides.
@@ -123,7 +123,7 @@ class Visualizer:
 
         self.controller_config_lock = threading.Lock()
         self.controller_config_updated = threading.Event()
-        self.controller_config = ControllerConfig()
+        self.controller_config = MPControllerConfig()
         self.controller_config.set_override(task_name)
 
         self.optimizer_lock = threading.Lock()

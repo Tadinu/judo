@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Generic, TypeVar, Optional, Callable, Union, TYPE_CHECKING
 
@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     from judo.simulation.base import Simulation
 
 # mjmanip
+from mjmanip.robot.arm_hand import ArmHand
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 
 
@@ -36,17 +37,15 @@ class TaskConfig:
     xml_path: Optional[Union[Path, str]] = None
     sim_xml_path: Optional[Union[Path, str]] = None
     usd_path: Optional[Union[Path, str]] = None
+    robot_class: Optional[ArmHand] = None
     qpos_home: Optional[np.ndarray] = None
-    joint_names: Optional[list[str]] = None
+    joint_names: Optional[list[str]] = field(default_factory=list)
     total_joint_q_size: int = 0
     total_joint_dq_size: int = 0
     total_body_q_size: int = 0
     total_body_qd_size: int = 0
     total_body_f_size: int = 0
     fabric_env_world_file_name: Optional[str] = None
-
-    def __post_init__(self):
-        self.joint_names = []
 
     def sim_backend_type(self) -> BackendType:
         return BackendType[self.sim_backend]
@@ -294,6 +293,9 @@ class Task(ABC, Generic[ConfigT]):
             limits = np.array(limits)
 
         return limits  # type: ignore
+
+    def should_stop_mpc(self) -> bool:
+        return False
 
     def reset(self) -> None:
         """Reset behavior for task. Sets config + velocities to zeros."""

@@ -77,7 +77,7 @@ class LeapFreeJointObjectPickApp(MPCApp):
         super().__init__(task_name=cfg.task_name,
                          optimizer_name=list(optimizer_registration_cfg.keys())[0],
                          sim_backend_type=cfg.sim_backend_type(),
-                         kernel_set_joint_targets=wp_kernel_set_leap_joint_targets,
+                         wp_kernel_set_joint_targets=wp_kernel_set_leap_joint_targets,
                          task_registration_cfg=task_registration_cfg,
                          optimizer_registration_cfg=optimizer_registration_cfg,
                          fabric_cfg=fabric_cfg)

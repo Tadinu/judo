@@ -61,6 +61,7 @@ class NewtonBackend:
     def __init__(self, joint_names: list[str],
                  num_substeps: int = 8,  # NOTE: Num of substeps must be large enough for sim to warm up
                  for_rollout: bool = False, rollout_timesteps: int = 10,
+                 kinematics_mode: bool = False,
                  headless: bool = True):
         # Settings
         self.fps: int = 50
@@ -71,6 +72,7 @@ class NewtonBackend:
         self.sim_substeps: int = num_substeps
         self.sim_dt: float = self.frame_dt / self.sim_substeps
         self.wp_device = wp.get_device()
+        self.kinematics_mode = kinematics_mode
 
         # Rollout
         self.for_rollout = for_rollout
@@ -87,7 +89,7 @@ class NewtonBackend:
         self.joint_local_ids: list[int] = []
         self.joint_ids: wp.array = None
         self.joint_target_controls: wp.array = None
-        self.kernel_set_joint_targets = wp_kernel_default_set_joint_targets
+        self.wp_kernel_set_joint_targets = wp_kernel_default_set_joint_targets
 
         # Solver
         self.solver = None
@@ -175,7 +177,7 @@ class NewtonBackend:
         with wp.ScopedDevice(self.wp_device):
             num_worlds = self.model_builder.num_worlds
             wp.launch(
-                self.kernel_set_joint_targets,
+                self.wp_kernel_set_joint_targets,
                 dim=num_worlds,
                 inputs=[
                     self.joint_target_controls,

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 
 from judo import MODEL_PATH
-from judo.controller.controller import Controller, ControllerConfig, make_controller
+from judo.controller.mpcontroller import MPController, MPControllerConfig, make_controller
 from judo.controller.overrides import (
     set_default_caltech_leap_cube_overrides,
     set_default_cartpole_overrides,
@@ -38,7 +38,7 @@ set_default_panda_leap_pick_overrides()
 set_default_triple_pandas_rotate_overrides()
 
 __all__ = [
-    "Controller",
-    "ControllerConfig",
+    "MPController",
+    "MPControllerConfig",
     "make_controller",
 ]

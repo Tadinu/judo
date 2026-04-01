@@ -1,14 +1,13 @@
-import os
 import time
-import random
 from typing import Callable, Optional
 from loop_rate_limiters import RateLimiter
 
 import torch
 
-torch.set_default_device(torch.device('cuda'))
+TORCH_DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+torch.set_default_device(torch.device(TORCH_DEVICE))
 torch.set_default_dtype(torch.float32)
-torch_device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
 import numpy as np
 import warp as wp
 import mujoco as mj
@@ -18,82 +17,84 @@ from xvfbwrapper import Xvfb
 
 # mjmanip
 from mjmanip.robot.arm_hand import ArmHandDiffIK
-# NOTE: LeapMjx hand is more robust than Leap, so use [panda_leap_mjx] for now!
-# from mjmanip.robot.panda_leap import PandaLeapEnv, PandaLeap, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
-from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
 from mjmanip.utils import mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene, mj_draw_spheres
 
-if PandaLeapMjx:
-    PandaLeapMjx.NINSTANCES = 1
-    PandaLeap = PandaLeapMjx
-if PandaLeapMjxEnv:
-    PandaLeapEnv = PandaLeapMjxEnv
-
 # judo
-from judo import BackendType, PACKAGE_ROOT
+from judo import BackendType
 from judo.simulation.mj_simulation import MJSimulation
 from judo.simulation.nt_simulation import NTSimulation
+from judo.app.utils import set_seed
+from judo.tasks.panda_leap_pick import USE_LEAP_MJX
+
+if USE_LEAP_MJX:
+    # NOTE: LeapMjx hand is more robust than Leap, so use [panda_leap_mjx] for now!
+    from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_SCENE_XML_PATH, ARM_XML_PATH, \
+        HAND_XML_PATH
+
+    PANDA_LEAP = PandaLeapMjx
+    PANDA_LEAP_ENV = PandaLeapMjxEnv
+else:
+    from mjmanip.robot.panda_leap import PandaLeapEnv, PandaLeap, ARM_SCENE_XML_PATH, ARM_XML_PATH, HAND_XML_PATH
+
+    PANDA_LEAP = PandaLeap
+    PANDA_LEAP_ENV = PandaLeapEnv
+PANDA_LEAP.NINSTANCES = 1
 
 # hand optimizer
 from hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams
 from object_utils import ObjectData
-from rot6d import compute_rotation_ortho6d_from_matrix
 
 RECORD_TIME = 300
-OBJ_NAME = PandaLeap.OBJECT_NAMES[0]
-
-
-def set_seed(seed):
-    torch.manual_seed(seed)
-    np.random.seed(seed)
-    random.seed(seed)
-
-    # When running on the CuDNN backend, two further options must be set
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = False
+OBJ_NAME = PANDA_LEAP.OBJECT_NAMES[0]
+PANDA_LEAP.BASE_PLATFORM_NAME = "base_platform"
 
 
 class UniGraspApp:
     def __init__(self, task_name: str,
                  sim_backend_type: BackendType,
-                 kernel_set_joint_targets: Optional[Callable] = None,
+                 wp_kernel_set_joint_targets: Optional[Callable] = None,
                  headless: bool = False) -> None:
         """Initialize the simulation node."""
         self.task_name = task_name
         self.step_cnt = 0
         self.num_rollouts = 1
-        self.qpos_home: Optional[np.ndarray] = PandaLeap.ARM_HOME_QPOS + PandaLeap.HAND_HOME_QPOS + \
-                                               PandaLeap.OBJECT_INIT_POSES[OBJ_NAME].tolist()
+        self.qpos_home: Optional[np.ndarray] = PANDA_LEAP.ARM_HOME_QPOS + PANDA_LEAP.HAND_HOME_QPOS + \
+                                               PANDA_LEAP.OBJECT_INIT_POSES[OBJ_NAME].tolist()
 
         # 1- Sim
+        kinematics_mode = False
         match sim_backend_type:
             case BackendType.MUJOCO | BackendType.MUJOCO_WARP:
                 self.sim = MJSimulation(init_task=task_name,
                                         num_rollout_worlds=self.num_rollouts,
+                                        kinematics_mode=kinematics_mode,
                                         headless=headless,
                                         record_video=headless)
             case BackendType.NEWTON:
                 self.sim = NTSimulation(init_task=task_name,
                                         num_substeps=8,  # MPC
                                         num_rollout_worlds=self.num_rollouts,
-                                        kernel_set_joint_targets=kernel_set_joint_targets)
+                                        wp_kernel_set_joint_targets=wp_kernel_set_joint_targets,
+                                        kinematics_mode=kinematics_mode)
         self.mj_model = self.sim.task.mj_model
         self.mj_data = self.sim.task.mj_data
-        full_hand_base_name = PandaLeap.hand_item_full_name(PandaLeap.HAND_BASE_NAME)
+        self.mj_robot_ctrl = self.mj_data.qpos if self.sim.kinematics_mode else self.mj_data.ctrl
+        full_hand_base_name = PANDA_LEAP.hand_item_full_name(PANDA_LEAP.HAND_BASE_NAME)
         self.hand_base = self.mj_data.body(full_hand_base_name)
         self.obj = self.mj_data.body(OBJ_NAME)
+        self.base_platform = self.mj_data.body(PANDA_LEAP.BASE_PLATFORM_NAME)
         mj.mj_forward(self.mj_model, self.mj_data)
 
         # 2- Controllers
         # Arm controller
-        self.arm_qpos_ids = mj_get_joints_qids(self.mj_model, PandaLeap.ARM_JOINTS_NAMES, is_qpos=True)
-        self.arm_ctrl_ids = mj_get_actuators_id_list(self.mj_model, PandaLeap.ARM_ACTS_NAMES)
+        self.arm_qpos_ids = mj_get_joints_qids(self.mj_model, PANDA_LEAP.ARM_JOINTS_NAMES, is_qpos=True)
+        self.arm_ctrl_ids = mj_get_actuators_id_list(self.mj_model, PANDA_LEAP.ARM_ACTS_NAMES)
         self.hand_qpos_ids = mj_get_joints_qids(self.mj_model,
-                                                PandaLeap.hand_items_full_names(PandaLeap.HAND_JOINTS_NAMES),
+                                                PANDA_LEAP.hand_items_full_names(PANDA_LEAP.HAND_JOINTS_NAMES),
                                                 is_qpos=True)
         self.hand_ctrl_ids = mj_get_actuators_id_list(self.mj_model,
-                                                      PandaLeap.hand_items_full_names(PandaLeap.HAND_ACTS_NAMES))
-        self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, PandaLeap, self.qpos_home,
+                                                      PANDA_LEAP.hand_items_full_names(PANDA_LEAP.HAND_ACTS_NAMES))
+        self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, PANDA_LEAP, self.qpos_home,
                                      ee_name=full_hand_base_name, ee_obj_type='body')
         self.diff_ik.DT = self.mj_model.opt.timestep
         self.diff_ik.init()
@@ -106,18 +107,21 @@ class UniGraspApp:
                                               joint_limit_upper=np.pi / 6)
 
         self.object_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data,
-                                                         body_names=['obj'], device=torch_device)
+                                                         body_names=[self.obj.name], device=TORCH_DEVICE)
+        self.base_plate_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data,
+                                                             body_names=[self.base_platform.name], device=TORCH_DEVICE)
 
-        self.hand_opt = HandOptimizer(device=torch_device,
-                                      object_data=self.object_data,
-                                      hand_params=HandParams.get(hand_model_name='leap_hand',
+        self.hand_opt = HandOptimizer(hand_params=HandParams.get(hand_model_name='leap_hand',
                                                                  xml_path=HAND_XML_PATH,
                                                                  joint_angles=np.array(
                                                                      self.mj_data.qpos[self.hand_qpos_ids],
                                                                      dtype=np.float32),
-                                                                 hand_pos=self.hand_base.xpos,
-                                                                 hand_quat=self.hand_base.xquat),
-                                      opt_params=self.opt_params)
+                                                                 hand_pos=self.hand_base.xpos.copy(),
+                                                                 hand_quat=self.hand_base.xquat.copy()),
+                                      object_data=self.object_data,
+                                      obstacle_data=self.base_plate_data,
+                                      opt_params=self.opt_params,
+                                      device=TORCH_DEVICE)
 
     @property
     def is_mujoco(self):
@@ -197,9 +201,12 @@ class UniGraspApp:
                   .repeat(hand_batches_num, 1, 1))
         next_grasp = self.hand_opt.step_optimize(cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
                                                  cur_wrist_rot=cur_wrist_rot,
-                                                 cur_mesh_poses=[np.concatenate([self.obj.xpos, self.obj.xquat])])
-        self.mj_data.ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles
-        mj_move_mocap(self.mj_model, self.mj_data, PandaLeap.EE_TARGET_MOCAP_NAME,
+                                                 cur_obj_mesh_poses=[np.concatenate([self.obj.xpos, self.obj.xquat])],
+                                                 cur_obst_mesh_poses=[
+                                                     np.concatenate(
+                                                         [self.base_platform.xpos, self.base_platform.xquat])])
+        self.mj_robot_ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles
+        mj_move_mocap(self.mj_model, self.mj_data, PANDA_LEAP.EE_TARGET_MOCAP_NAME,
                       pos=next_grasp.wrist_pos, quat=next_grasp.wrist_quat)
 
         # Arm plan
@@ -207,7 +214,7 @@ class UniGraspApp:
         q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=True)
         if q is None:
             q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=False)
-        self.mj_data.ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
+        self.mj_robot_ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
 
         # Visualize
         visualize_grasp = False

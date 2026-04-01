@@ -22,9 +22,20 @@ import roma
 from .layer_asset_utils import LEAP_LAYER_CACHE_DIR
 
 # mjmanip
-from mjmanip.robot.leap_mjx import LEAP_ASSETS_DIR, LeapMjx
 from mjmanip.utils import mj_get_mesh_file_path
 from mjmanip.trimesh_utils import mj_geom_spec_to_trimesh
+
+# judo
+from judo.tasks.panda_leap_pick import USE_LEAP_MJX
+
+if USE_LEAP_MJX:
+    from mjmanip.robot.leap_mjx import LEAP_ASSETS_DIR, LeapMjx
+
+    LEAP = LeapMjx
+else:
+    from mjmanip.robot.leap import LEAP_ASSETS_DIR, Leap
+
+    LEAP = Leap
 
 
 # All lengths are in mm and rotations in radians
@@ -52,7 +63,7 @@ class LeapHandLayer(torch.nn.Module):
         else:
             self.mj_spec, self.chain = pk.build_chain_from_mjcf(hand_model_desc, device=device)
             self.mj_spec.meshdir = LEAP_ASSETS_DIR
-            hand_base_spec = self.mj_spec.body(LeapMjx.HAND_BASE_NAME)
+            hand_base_spec = self.mj_spec.body(LEAP.HAND_BASE_NAME)
             hand_base_spec.pos = hand_base_pose[:3]
             hand_base_spec.quat = hand_base_pose[3:]
             self.mj_model: mj.MjModel = self.mj_spec.compile()
@@ -196,6 +207,8 @@ class LeapHandLayer(torch.nn.Module):
         meshes = {}
         for link_key, _ in self.link_geom_names.items():
             link = self.chain.find_link(link_key)
+            if not link:
+                continue
             link_pk_geoms = link.collisions if self.use_collision_mesh else link.visuals
             for pk_geom in link_pk_geoms:
                 geom_spec = next((g for g in self.mj_spec.geoms if g.name == pk_geom.name), None)
@@ -273,6 +286,8 @@ class LeapHandLayer(torch.nn.Module):
         for geom_name_list in self.link_geom_names.values():
             geom_name_list = [geom_name_list] if isinstance(geom_name_list, str) else geom_name_list
             for geom_name in geom_name_list:
+                if geom_name not in self.meshes:
+                    continue
                 end = segment_start + self.meshes[geom_name][0].shape[
                     0]  # torch.tensor(self.meshes[link_name][0].shape[0], dtype=torch.long, device=self.device)
                 hand_segment_indices[geom_name] = torch.arange(segment_start, end)  # [segment_start, end]
@@ -341,6 +356,8 @@ class LeapHandLayer(torch.nn.Module):
         for link_key, geom_names in self.link_geom_names.items():
             geom_name_list = [geom_names] if isinstance(geom_names, str) else geom_names
             for geom_name in geom_name_list:
+                if geom_name not in self.meshes:
+                    continue
                 mesh_data = self.meshes[geom_name]
                 rotmat = frame_tfs[link_key].get_matrix()
                 rotmat = torch.matmul(pose, torch.matmul(self.to_mano_transform, rotmat))
@@ -404,18 +421,20 @@ class LeapHandLayer(torch.nn.Module):
             self.visible_point_indices[geom_name] = v_sampled_idx
         print(count)
 
-    def sample_geom_surface_points(self, geom_mesh: trimesh.Trimesh) -> tuple[np.ndarray, np.ndarray]:
+    def sample_geom_surface_points(self, geom_mesh: trimesh.Trimesh, n_points: int = 10000) -> tuple[
+        np.ndarray, np.ndarray]:
         np.random.seed(0)
-        points, idx = trimesh.sample.sample_surface_even(geom_mesh, 50000, radius=None)
+        points, idx = trimesh.sample.sample_surface_even(geom_mesh, n_points, radius=None)
         point_normals = geom_mesh.face_normals[idx]
         return points, point_normals
 
-    def sample_surface_points(self, dst_dir=f'{LEAP_LAYER_CACHE_DIR}/hand_points', visualize: bool = False):
+    def sample_surface_points(self, dst_dir=f'{LEAP_LAYER_CACHE_DIR}/hand_points', n_points: int = 50000,
+                              visualize: bool = False):
         for geom_name, geom_convex_mesh in self.geom_convex_meshes.items():
             if geom_name in self.hand_points:
                 points_info = self.hand_points[geom_name]
             else:
-                points, point_normals = self.sample_geom_surface_points(geom_convex_mesh)
+                points, point_normals = self.sample_geom_surface_points(geom_convex_mesh, n_points)
                 points_info = np.concatenate([points, point_normals], axis=-1)
 
             os.makedirs(dst_dir, exist_ok=True)

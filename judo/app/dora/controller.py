@@ -10,7 +10,7 @@ from dora_utils.node import DoraNode, on_event
 from omegaconf import DictConfig
 
 from judo.app.structs import MujocoState
-from judo.controller import Controller, make_controller
+from judo.controller import MPController, make_controller
 
 
 class ControllerNode(DoraNode):
@@ -46,7 +46,7 @@ class ControllerNode(DoraNode):
             with self.lock:
                 task = task_cls()
                 optimizer = self.controller.optimizer_cls(self.controller.optimizer_config_cls(), task.nu)
-                self.controller = Controller(
+                self.controller = MPController(
                     controller_config=self.controller.controller_cfg,
                     task=task,
                     optimizer=optimizer,

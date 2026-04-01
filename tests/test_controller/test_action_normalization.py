@@ -5,7 +5,7 @@ from contextlib import nullcontext as does_not_raise
 import numpy as np
 
 from judo import BackendType
-from judo.controller import ControllerConfig, make_controller
+from judo.controller import MPControllerConfig, make_controller
 from judo.utils.normalization import IdentityNormalizer, MinMaxNormalizer, RunningMeanStdNormalizer, NormalizerType
 
 
@@ -151,7 +151,7 @@ def test_normalizer_in_update_action_loop() -> None:
             init_optimizer="cem",
             rollout_backend=BackendType.MUJOCO,
         )
-        controller.controller_cfg = ControllerConfig(action_normalizer=normalizer_type.name)
+        controller.controller_cfg = MPControllerConfig(action_normalizer=normalizer_type.name)
 
         controller.mj_current_state = np.random.rand(controller.task.mj_model.nq + controller.task.mj_model.nv)
         controller.time = 0.0
@@ -168,7 +168,7 @@ def test_min_max_normalizer_with_task_control_ranges() -> None:
         init_optimizer="cem",
         rollout_backend=BackendType.MUJOCO,
     )
-    controller.controller_cfg = ControllerConfig(action_normalizer=NormalizerType.MIN_MAX.name, max_opt_iters=1)
+    controller.controller_cfg = MPControllerConfig(action_normalizer=NormalizerType.MIN_MAX.name, max_opt_iters=1)
 
     assert isinstance(controller.action_normalizer, MinMaxNormalizer)
 
@@ -199,7 +199,7 @@ def test_running_normalizer_updates_with_optimizer_data() -> None:
                                  init_task="cylinder_push",
                                  init_optimizer="cem",
                                  rollout_backend=BackendType.MUJOCO)
-    controller.controller_cfg = ControllerConfig(action_normalizer=NormalizerType.RUNNING.name, max_opt_iters=1)
+    controller.controller_cfg = MPControllerConfig(action_normalizer=NormalizerType.RUNNING.name, max_opt_iters=1)
 
     # Check initial state
     assert isinstance(controller.action_normalizer, RunningMeanStdNormalizer)

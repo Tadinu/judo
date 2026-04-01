@@ -26,6 +26,7 @@ USE_FABRICS = False and not USE_MJX
 
 # mjmanip
 from mjmanip import DEFAULT_SCENE_XML_PATH
+from mjmanip.utils import IDENTITY_WXYZ
 
 if USE_FABRICS:
     from mjmanip.robot.leap_fabrics import LeapWithFabrics, LeapWithFabricsEnv, HAND_XML_PATH
@@ -60,6 +61,7 @@ class ObjectRelocatingPhase(Enum):
     """Defines the phases of the Leap Free-joint object pick task."""
 
     REACHING_OBJ = enum.auto()
+    GRASPING_OBJ = enum.auto()
     ORIENTATING_OBJ = enum.auto()
     BRINGING_OBJ_TO_GOAL = enum.auto()
 
@@ -152,7 +154,7 @@ class LeapFreeJointObjectPick(LeapCube):
         # NOTE: For rollout result analysis, these are only valid IF MuJoCo-C Rollout backend supports mocap_pos/quat
         # for the `initial_state`
         self.reach_threshold = 0.015 if self.OBJ_NAME == "cube" else 0.15
-        self.orientation_threshold = 0.0001
+        self.orientation_threshold = 0.01
         self.last_obj_distance_to_goal = 0.
 
     def mj_compose_spec(self) -> Optional[mj.MjSpec]:
@@ -219,13 +221,14 @@ class LeapFreeJointObjectPick(LeapCube):
 
         # Phase 2: Orientating Obj/Bringing Obj to Goal
         obj_orientation_err = cur_sensor_data[self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
-        goal_err_quat = np.array([1.0, 0.0, 0.0, 0.0])
-        if np.square(np_quat_diff_so3(obj_orientation_err, goal_err_quat)).sum() > self.orientation_threshold ** 2:
+        goal_err_quat = IDENTITY_WXYZ
+        goal_err = np.square(np_quat_diff_so3(obj_orientation_err, goal_err_quat)).sum()
+        if goal_err > self.orientation_threshold ** 2:
             obj_distance_to_goal = np.square(cur_sensor_data[self.obj_pos_distance_to_goal_sensor_idx:
                                                              self.obj_pos_distance_to_goal_sensor_idx + 3]).sum()
-            if self.last_obj_distance_to_goal > obj_distance_to_goal:
+            if obj_distance_to_goal < self.last_obj_distance_to_goal:
                 self.last_obj_distance_to_goal = obj_distance_to_goal
-                return ObjectRelocatingPhase.ORIENTATING_OBJ
+            return ObjectRelocatingPhase.ORIENTATING_OBJ
 
         return ObjectRelocatingPhase.BRINGING_OBJ_TO_GOAL
 

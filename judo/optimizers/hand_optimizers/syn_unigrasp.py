@@ -70,7 +70,7 @@ if __name__ == "__main__":
                 else roma.unitquat_to_rotmat(torch.tensor([0.71, 0.71, 0, 0])).repeat(BATCHES_NUM, 1, 1)
             hand_opt.step_optimize(cur_wrist_pos=np.tile([0, 0, 1], (BATCHES_NUM, 1)),
                                    cur_wrist_rot=new_wrist_rot,
-                                   cur_mesh_poses=[np.array([0, 0, 1, 0.71, 0.71, 0, 0])])
+                                   cur_obj_mesh_poses=[np.array([0, 0, 1, 0.71, 0.71, 0, 0])])
         grasp = hand_opt.best_grasp_configuration()
 
         # Visualize
