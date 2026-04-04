@@ -30,7 +30,13 @@ def point2point_signed(
         - y2x_signed: Torch.Tensor
             the sign distance from y to x
         - yidx_near: Torch.tensor
+            the indices of y vertices closest to x
+        - xidx_near: Torch.tensor
             the indices of x vertices closest to y
+        - y2x: Torch.tensor
+            y - y_near
+        - x2y: Torch.tensor
+            x - x_near
     """
     if use_cosine_collision == True:
         use_cosine_collision = [True, True]
@@ -98,8 +104,6 @@ def point2point_nosigned(
         x_normals: Optional FloatTensor of shape (N, P1, D).
         y_normals: Optional FloatTensor of shape (N, P2, D).
     Returns:
-        - y2x_signed: Torch.Tensor
-            the sign distance from y to x
         - y2x_signed: Torch.Tensor
             the sign distance from y to x
         - yidx_near: Torch.tensor

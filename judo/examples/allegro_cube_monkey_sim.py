@@ -73,7 +73,7 @@ class AllegroCubeMonkeySim(NTSimulation):
         joint_qd_start = self.model_builder.joint_qd_start
         joint_target_pos = self.sim_backend.joint_target_controls.numpy()
         joint_ids = self.sim_backend.joint_ids.numpy()
-        for world_id in range(self.sim_backend.model_builder.num_worlds):
+        for world_id in range(self.sim_backend.model_builder.world_count):
             # Randomize joints based on [world_time]
             t = world_time[world_id]
             for i in joint_ids[world_id]:
@@ -90,7 +90,7 @@ task_reg_cfg = None
 CONFIG_PATH = (Path(__file__).parent.parent / "configs").resolve()
 
 
-@hydra.main(config_path=str(CONFIG_PATH), config_name="judo_dora_allegro_cube", version_base="1.3")
+@hydra.main(config_path=str(CONFIG_PATH), config_name="judo_dora_allegro_cube_rotate", version_base="1.3")
 def fetch_cfgs(cfg: DictConfig) -> None:
     """Main function to run judo via a hydra configuration yaml file."""
     global task_reg_cfg

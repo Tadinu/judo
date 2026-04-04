@@ -1,4 +1,6 @@
 from __future__ import annotations
+
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional, TYPE_CHECKING
 import numpy as np
@@ -11,8 +13,11 @@ from mjmanip import DEFAULT_SCENE_MJX_XML_PATH, DEFAULT_SCENE_XML_PATH
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
 from mjmanip.utils import IDENTITY_WXYZ, mj_body_free_joint_name, mj_get_site_pose
 
+# judo
+from judo.hand_layers.leap_layer import USE_LEAP_MJX
+
 # NOTE: LeapMjx hand is more robust than Leap, so use [panda_leap_mjx] for now!
-USE_LEAP_MJX = False
+
 if USE_LEAP_MJX:
     from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_XML_PATH, HAND_XML_PATH
 
@@ -77,7 +82,12 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         self.qpos_home = self.config.qpos_home
         self.robot_env = None
         self.robot = None
+        self.cur_phase_start_time: dict[ObjectRelocatingPhase, float] = {}
+        self.last_phase = ObjectRelocatingPhase.REACHING_OBJ
+        self.cur_phase_start_time[ObjectRelocatingPhase.REACHING_OBJ] = time.time()
+
         self.map_controls = self.map_ee_to_arm_controls if USE_EE_MPC else None
+
         self.rollout_diff_iks = None
         self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, PANDA_LEAP, self.qpos_home)
         self.diff_ik.DT = self.mj_model.opt.timestep
@@ -188,13 +198,21 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
 
         return ObjectRelocatingPhase.BRINGING_OBJ_TO_GOAL
 
+    @property
+    def cur_phase_duration(self) -> float:
+        cur_phase = self.cur_phase
+        if cur_phase == self.last_phase:
+            return time.time() - self.cur_phase_start_time[cur_phase]
+        else:
+            return 0.0
+
     def reward(self,
                states: np.ndarray,
                sensors: np.ndarray,
                controls: np.ndarray,
                system_metadata: Optional[dict[str, Any]] = None) -> np.ndarray:
         """Implements the ALLEGRO cube rotation tracking task reward."""
-        is_cur_obj_within_grasp = self.cur_phase != ObjectRelocatingPhase.REACHING_OBJ
+        is_reaching_obj = self.cur_phase == ObjectRelocatingPhase.REACHING_OBJ
 
         # Stage 1: Obj Reaching cost - Ignore Z
         # Always avoid arm contact, to focus on hand-based grasping only
@@ -220,7 +238,13 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             grasp_direction_site_pos - grasp_site_pos, axis=2)[..., np.newaxis]
         grasp_obj_direction = (obj_position - grasp_site_pos) / np.linalg.norm(obj_position - grasp_site_pos,
                                                                                axis=2)[..., np.newaxis]
-        grasp_direction_cost = 10 * np.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1)
+        grasp_direction_cost = (
+            # Palm-aimed-toward-object direction
+                5 * np.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1) +
+                # Palm-face-down direction
+                10 * np.square(grasp_direction - np.array([0, 0, -1])).sum(-1).mean(-1)
+        )
+
         grasp_cost = 0.001 * np.sum(np.square(controls)) + grasp_direction_cost
         if True:
             arm_contact_cost = self.sensors_contact_cost(sensors, self.obj_contact_with_arm_sensors)
@@ -234,23 +258,24 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         hand_vel_cost = np.sum(np.square(hand_velocity))
 
         # Stage 5: Obj Bringing-To-Goal cost
-        if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
-            obj_to_goal_distance = np.square(obj_position - self.goal_pos)
+        bring_enabled = True
+        if bring_enabled:
+            if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
+                obj_to_goal_distance = np.square(obj_position - self.goal_pos)
+            else:
+                obj_to_goal_distance = self.sensor_value(sensors, self.obj_pos_distance_to_goal_sensor_idx, 3)
+            bring_cost = 50 * np.square(obj_to_goal_distance).sum(-1).mean(-1)
         else:
-            obj_to_goal_distance = self.sensor_value(sensors, self.obj_pos_distance_to_goal_sensor_idx, 3)
-        bring_cost = 50 * np.square(obj_to_goal_distance).sum(-1).mean(-1)
+            bring_cost = 0.0
 
         # Final reward
-        if is_cur_obj_within_grasp:
-            # print(arm_contact_cost, finger_contact_cost)
-            total_reward = - (reaching_cost + orientation_cost + grasp_cost + obj_vel_cost + hand_vel_cost + bring_cost)
-            # print(total_reward.mean())
-            return total_reward
-        else:
+        if is_reaching_obj:
             return -reaching_cost - grasp_cost - grasp_direction_cost
+        else:
+            return - reaching_cost - orientation_cost - grasp_cost - obj_vel_cost - hand_vel_cost - bring_cost
 
     def should_stop_mpc(self) -> bool:
-        return self.cur_phase == ObjectRelocatingPhase.GRASPING_OBJ
+        return self.cur_phase == ObjectRelocatingPhase.GRASPING_OBJ  # and self.cur_phase_duration > 0.5
 
     def reset(self) -> None:
         """Resets the model to a default state with random goal."""
@@ -269,7 +294,10 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         return {"goal_quat": self.goal_quat}
 
     def post_sim_step(self) -> None:
-        pass
+        cur_phase = self.cur_phase
+        if cur_phase != self.last_phase:
+            self.last_phase = cur_phase
+            self.cur_phase_start_time[cur_phase] = time.time()
 
     def pre_sim_step(self) -> None:
         self._update_goal()

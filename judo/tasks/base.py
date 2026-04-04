@@ -146,7 +146,7 @@ class Task(ABC, Generic[ConfigT]):
 
         # Finalize models
         if num_rollout_worlds > 1:
-            if self.nt_rollout_model_builder and self.nt_rollout_model_builder.num_worlds == num_rollout_worlds:
+            if self.nt_rollout_model_builder and self.nt_rollout_model_builder.world_count == num_rollout_worlds:
                 return
             # Scene model: multi-replications of sim model (before replicating it to the rollout model)
             self.nt_rollout_model_builder = newton.ModelBuilder()
@@ -161,8 +161,8 @@ class Task(ABC, Generic[ConfigT]):
             self.nt_rollout_model_builder = self.nt_sim_model_builder
             self.nt_rollout_model = self.nt_sim_model
 
-        self.nt_num_rollout_worlds = self.nt_rollout_model_builder.num_worlds
-        self.nt_num_bodies_per_world = self.nt_rollout_model.body_count // self.nt_rollout_model_builder.num_worlds
+        self.nt_num_rollout_worlds = self.nt_rollout_model_builder.world_count
+        self.nt_num_bodies_per_world = self.nt_rollout_model.body_count // self.nt_rollout_model_builder.world_count
         self.nt_initial_world_positions = self.nt_rollout_model.body_q.numpy()[
             :: self.nt_sim_model_builder.body_count, :3].copy() if self.nt_rollout_model else None
 

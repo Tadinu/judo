@@ -287,7 +287,7 @@ class MPController:
                 self.mj_rollout_backend.update(self.optimizer_cfg.num_rollouts)
         else:
             assert self.nt_rollout_model
-            if self.nt_rollout_model_builder.num_worlds != self.optimizer_cfg.num_rollouts:
+            if self.nt_rollout_model_builder.world_count != self.optimizer_cfg.num_rollouts:
                 self.task.nt_init_models(self.optimizer_cfg.num_rollouts)
                 if self.nt_rollout_backend.model != self.nt_rollout_model:
                     self.nt_rollout_backend.set_model(self.nt_rollout_model, self.nt_rollout_model_builder)

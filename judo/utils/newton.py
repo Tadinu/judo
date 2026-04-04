@@ -115,19 +115,19 @@ class NewtonBackend:
         # Model evaluation
         self.model = model
         self.model_builder = model_builder
-        self.world_time = wp.zeros(model_builder.num_worlds, dtype=wp.float32)
+        self.world_time = wp.zeros(model_builder.world_count, dtype=wp.float32)
 
         # Joint ids
-        joints_num = model_builder.joint_count // model_builder.num_worlds
-        self.joint_local_ids = [model_builder.joint_key.index(jname) for jname in self.joint_names]
-        joint_ids = np.zeros((model_builder.num_worlds, len(self.joint_names)), dtype=int)
-        for world_id in range(model_builder.num_worlds):
+        joints_num = model_builder.joint_count // model_builder.world_count
+        self.joint_local_ids = [model_builder.joint_label.index(jname) for jname in self.joint_names]
+        joint_ids = np.zeros((model_builder.world_count, len(self.joint_names)), dtype=int)
+        for world_id in range(model_builder.world_count):
             joint_id_offset = world_id * joints_num
             joint_ids[world_id] = [i + joint_id_offset for i in self.joint_local_ids]
         self.joint_ids = wp.array(joint_ids, dtype=wp.int32)
 
         # Joint target controls
-        self.joint_target_controls = wp.zeros((model_builder.num_worlds, model_builder.joint_dof_count),
+        self.joint_target_controls = wp.zeros((model_builder.world_count, model_builder.joint_dof_count),
                                               dtype=wp.float32)
 
         # Eval model fk
@@ -155,9 +155,7 @@ class NewtonBackend:
         self.rollout_model_ctrls = [model.control()] * self.num_steps
 
         # Viewer
-        # NOTE: Thought ViewerGL has a `headless` param, but it seems it still causes trouble to the headful one.
-        # -> Disable for now. TODO: Find out why!
-        self.viewer = newton.viewer.ViewerGL() if not self.headless else None
+        self.viewer = newton.viewer.ViewerGL(headless=not self.headless)
         if self.viewer:
             self.viewer.set_model(model)
 
@@ -175,7 +173,7 @@ class NewtonBackend:
 
     def _prepare_model_ctrl(self) -> None:
         with wp.ScopedDevice(self.wp_device):
-            num_worlds = self.model_builder.num_worlds
+            num_worlds = self.model_builder.world_count
             wp.launch(
                 self.wp_kernel_set_joint_targets,
                 dim=num_worlds,

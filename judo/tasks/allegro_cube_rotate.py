@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 class AllegroCubeRotateConfig(TaskConfig):
     """Reward configuration ALLEGRO cube rotation task."""
 
-    sim_backend: str = BackendType.MUJOCO.name
+    sim_backend: str = BackendType.NEWTON.name
     task_name: str = "allegro_cube"
     xml_path: Optional[Union[Path, str]] = LeapCubeConfig().xml_path  # CaltechLeapCubeConfig().xml_path
     sim_xml_path: Optional[Union[Path, str]] = LeapCubeConfig().sim_xml_path  # CaltechLeapCubeConfig().sim_xml_path
@@ -95,16 +95,16 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
         self.goal_mocap_id = self.mj_sim_model.body_mocapid[goal_mocap_body_id] if goal_mocap_body_id > -1 else -1
         if self.nt_sim_model_builder:
             cube_names = ['cube', '/World/envs/env_0/object/DexCube']
-            self.nt_cube_body_idx_offset = [self.nt_sim_model_builder.body_key.index(cube_name)
+            self.nt_cube_body_idx_offset = [self.nt_sim_model_builder.body_label.index(cube_name)
                                             for cube_name in cube_names
-                                            if cube_name in self.nt_sim_model_builder.body_key][0]
+                                            if cube_name in self.nt_sim_model_builder.body_label][0]
 
     def nt_configure_custom_model_builder(self, model_builder: newton.ModelBuilder):
         model_builder.default_shape_cfg.ke = 1.0e3
         model_builder.default_shape_cfg.kd = 1.0e2
 
         # hide collision shapes for the hand links
-        for i, key in enumerate(model_builder.shape_key):
+        for i, key in enumerate(model_builder.shape_label):
             if re.match(".*Robot/.*?/collision", key):
                 model_builder.shape_flags[i] &= ~newton.ShapeFlags.VISIBLE
 

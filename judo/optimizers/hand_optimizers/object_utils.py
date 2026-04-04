@@ -57,10 +57,15 @@ class ObjectData:
                            body_names: Optional[list[str]] = None,
                            voxel_size: float = 0.006, scale: float = 1.0,
                            merging_meshes: bool = True,
+                           visualized: bool = False,
                            device: Union[torch.device, str] = 'cuda') -> ObjectData:
+        mj_spec: mj.MjSpec = None
         if isinstance(mj_model, str):
             assert mj_model.endswith('.xml')
-            mj_model: mj.MjModel = mj.MjModel.from_xml_path(mj_model)
+            mj_spec = mj.MjSpec.from_file(mj_model)
+            mj_model: mj.MjModel = mj_spec.compile()
+            if not mj_data:
+                mj_data = mj.MjData(mj_model)
         else:
             pass
 
@@ -69,7 +74,8 @@ class ObjectData:
             body_names.remove('world')
         meshes = []
         mesh_poses = []
-        for _, m in mj_get_body_trimeshes(mj_model, mj_data, body_names=body_names, is_collision=True).items():
+        for _, m in mj_get_body_trimeshes(mj_model, data=mj_data, model_spec=mj_spec, body_names=body_names,
+                                          use_global_pose=True, is_collision=True).items():
             meshes.append(m[0])
             mesh_poses.append(m[1])
         if merging_meshes:
@@ -78,6 +84,11 @@ class ObjectData:
             base_body_data = mj_data.body(body_names[0]) if mj_data else None
             mesh_poses = [np.concat([base_body_data.xpos, base_body_data.xquat]) if base_body_data \
                               else np.concat([base_body.pos, base_body.quat])]
+
+        if visualized:
+            trimesh.Scene(meshes).show()
+
+        # Sample meshes' points
         points = []
         normals = []
         for mesh in meshes:
@@ -136,6 +147,10 @@ class ObjectData:
                 self.points[i].copy_(self.points[i] @ R.T + t)
                 self.normals[i].copy_(torch.nn.functional.normalize(self.normals[i] @ R.T, dim=-1))
         self.poses = new_poses
+
+    def visualize(self):
+        trimesh.Scene(self.meshes).show()
+        trimesh.Scene(trimesh.PointCloud(self.all_points.cpu().numpy())).show()
 
 
 def get_stable_pose(mesh):

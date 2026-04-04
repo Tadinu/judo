@@ -10,9 +10,9 @@ import warp as wp
 
 import torch
 
-torch.set_default_device(torch.device('cuda'))
+torch.set_default_device('cuda')
 torch.set_default_dtype(torch.float32)
-TORCH_DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+TORCH_DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
 import roma
 
@@ -52,15 +52,19 @@ class MPCApp:
                  optimizer_registration_cfg: Optional[DictConfig] = None,
                  fabric_cfg: Optional[ArmHandPoseFabricConfig] = None,
                  kinematics_mode: bool = False,
-                 headless: bool = False) -> None:
+                 headless: bool = False,
+                 device: str = TORCH_DEVICE) -> None:
         """Initialize the simulation node."""
         self.task_name = task_name
         self.step_cnt = 0
         self.robot_class: ArmHand = robot_class
+        self.device = device
 
         # 1- Sim
-        optimizer_config_cls = get_class_from_string(optimizer_registration_cfg[optimizer_name].config)
-        num_rollouts = get_override_config(optimizer_config_cls, task_name)["num_rollouts"]
+        optimizer_config_cls = get_class_from_string(optimizer_registration_cfg[optimizer_name].config) \
+            if optimizer_registration_cfg else None
+        num_rollouts = get_override_config(optimizer_config_cls, task_name)["num_rollouts"] if optimizer_config_cls \
+            else 1
         match sim_backend_type:
             case BackendType.MUJOCO | BackendType.MUJOCO_WARP:
                 self.sim = MJSimulation(init_task=task_name,
@@ -96,19 +100,20 @@ class MPCApp:
         self.synchronous_controller = True
         if self.synchronous_controller:
             # MPC
-            self.sim.mpcontroller = self.mpcontroller = make_controller(
-                sim=self.sim,
-                init_task=self.sim.task,
-                init_optimizer=optimizer_name,
-                task_registration_cfg=task_registration_cfg,
-                optimizer_registration_cfg=optimizer_registration_cfg,
-                rollout_backend=sim_backend_type
-            )
-            print("CONTROLLER NUM_TIMESTEPS", self.mpcontroller.num_timesteps)
-            self.fetch_nominal_control_spline()
-            self.write_state_to_controller()
-            # Only for task update if from another thread
-            self.lock = Lock()
+            if task_registration_cfg:
+                self.sim.mpcontroller = self.mpcontroller = make_controller(
+                    sim=self.sim,
+                    init_task=self.sim.task,
+                    init_optimizer=optimizer_name,
+                    task_registration_cfg=task_registration_cfg,
+                    optimizer_registration_cfg=optimizer_registration_cfg,
+                    rollout_backend=sim_backend_type
+                )
+                print("CONTROLLER NUM_TIMESTEPS", self.mpcontroller.num_timesteps)
+                self.fetch_nominal_control_spline()
+                self.write_state_to_controller()
+                # Only for task update if from another thread
+                self.lock = Lock()
 
             # MUJOCO-Specific controllers
             if self.is_mujoco and robot_class:
@@ -127,6 +132,7 @@ class MPCApp:
                 self.hand_ctrl_ids = mj_get_actuators_id_list(self.mj_model,
                                                               robot_class.hand_items_full_names(
                                                                   robot_class.HAND_ACTS_NAMES))
+                self.mj_robot_ctrl = self.mj_data.qpos if self.sim.kinematics_mode else self.mj_data.ctrl
                 self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, robot_class, self.qpos_home,
                                              ee_name=robot_class.hand_item_full_name(robot_class.HAND_BASE_NAME),
                                              ee_obj_type='body')
@@ -135,34 +141,35 @@ class MPCApp:
 
                 # Hand controller
                 set_seed(0)
-                self.opt_params = HandOptimizerParams(n_batches=1, distance_lower=0.05, distance_upper=0.15,
+                self.opt_params = HandOptimizerParams(nbatches=1, distance_lower=0.05, distance_upper=0.15,
                                                       jitter_strength=0.1,
                                                       joint_limit_lower=-np.pi / 6,
                                                       joint_limit_upper=np.pi / 6)
 
                 self.obj = self.mj_data.body(OBJ_NAME)
                 self.object_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data,
-                                                                 body_names=[self.obj.name], device=TORCH_DEVICE)
+                                                                 body_names=[self.obj.name], device=self.device)
 
                 self.base_platform = self.mj_data.body(robot_class.BASE_PLATFORM_NAME)
                 self.base_plate_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data,
                                                                      body_names=[self.base_platform.name],
-                                                                     device=TORCH_DEVICE)
+                                                                     device=self.device)
 
                 self.hand_base = self.mj_data.body(
                     self.robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME))
                 self.hand_opt = HandOptimizer(
                     hand_params=HandParams.get(hand_model_name=self.robot_class.HAND_MODEL_NAME,
                                                xml_path=self.robot_class.HAND_XML_PATH,
-                                               joint_angles=np.array(
-                                                   self.mj_data.qpos[self.hand_qpos_ids],
-                                                   dtype=np.float32),
+                                               joint_angles=np.array(self.mj_data.qpos[self.hand_qpos_ids],
+                                                                     dtype=np.float32),
                                                hand_pos=self.hand_base.xpos.copy(),
                                                hand_quat=self.hand_base.xquat.copy()),
                     object_data=self.object_data,
                     obstacle_data=self.base_plate_data,
                     opt_params=self.opt_params,
-                    device=TORCH_DEVICE)
+                    apply_force_closure=True,
+                    to_mano_frame=False,
+                    device=self.device)
 
     @property
     def is_mujoco(self):
@@ -193,7 +200,6 @@ class MPCApp:
 
                 # Plan
                 if self.synchronous_controller and (self.step_cnt % num_steps == 0 if num_steps > 1 else True):
-                    self.write_state_to_controller()
                     self.plan()
 
                 # Step
@@ -213,7 +219,6 @@ class MPCApp:
             with wp.ScopedTimer("step", active=False):
                 start_time = time.time()
                 if self.synchronous_controller:
-                    self.write_state_to_controller()
                     self.plan()
                 self.sim.step()
 
@@ -236,8 +241,6 @@ class MPCApp:
         assert not self.synchronous_controller
         while True:
             start_time = time.time()
-            # TODO:Fetch state data from sim
-            self.write_state_to_controller()
             self.plan()
 
             # Force controller to run at fixed rate specified by control_freq.
@@ -254,25 +257,28 @@ class MPCApp:
         if self.sim.task.should_stop_mpc():
             self.plan_arm_hand()
         else:
-            self.mpcontroller.update_action()
-            if self.is_mujoco:
-                mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
-                              pos=self.hand_base.xpos, quat=self.hand_base.xquat)
-                if self.hand_opt:
-                    self.hand_opt.update_opt_wrist_pose(wrist_pos=torch.from_numpy(self.hand_base.xpos).unsqueeze(0)
-                                                        .float().to(TORCH_DEVICE),
-                                                        wrist_rot=torch.from_numpy(self.hand_base.xquat)
-                                                        .unsqueeze(0).float().to(TORCH_DEVICE))
+            if self.mpcontroller:
+                self.write_state_to_controller()
+                self.mpcontroller.update_action()
+                if self.is_mujoco:
+                    mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
+                                  pos=self.hand_base.xpos, quat=self.hand_base.xquat)
+                    if self.hand_opt:
+                        self.hand_opt.update_opt_wrist_pose(wrist_pos=torch.from_numpy(self.hand_base.xpos).unsqueeze(0)
+                                                            .float().to(self.device),
+                                                            wrist_rot=torch.from_numpy(self.hand_base.xquat)
+                                                            .unsqueeze(0).float().to(self.device))
         # end = time.perf_counter()
 
         # print("plan_time", end - start)
-        self.fetch_nominal_control_spline()
+        if self.mpcontroller:
+            self.fetch_nominal_control_spline()
         # self.sim.nominal_action = self.controller.action(self.sim.sim_backend.sim_time)
         # print("best action", self.sim.optimal_action)
 
     def plan_arm_hand(self):
         # Hand plan
-        hand_batches_num = self.hand_opt.n_batches
+        hand_batches_num = self.hand_opt.nbatches
         assert hand_batches_num == 1
         cur_hand_pos = self.hand_base.xpos.copy()
         cur_hand_quat = self.hand_base.xquat.copy()
@@ -282,10 +288,9 @@ class MPCApp:
         next_grasp = self.hand_opt.step_optimize(cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
                                                  cur_wrist_rot=cur_wrist_rot,
                                                  cur_obj_mesh_poses=[np.concatenate([self.obj.xpos, self.obj.xquat])],
-                                                 cur_obst_mesh_poses=[
-                                                     np.concatenate(
-                                                         [self.base_platform.xpos, self.base_platform.xquat])])
-        self.mj_data.ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles
+                                                 cur_obst_mesh_poses=[np.concatenate([self.base_platform.xpos,
+                                                                                      self.base_platform.xquat])])
+        self.mj_robot_ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles
         mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
                       pos=next_grasp.wrist_pos, quat=next_grasp.wrist_quat)
 
@@ -294,7 +299,7 @@ class MPCApp:
         q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=True)
         if q is None:
             q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=False)
-        self.mj_data.ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
+        self.mj_robot_ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
 
         # Visualize
         visualize_grasp = False
@@ -354,6 +359,7 @@ class MPCApp:
         self.sim.paused = not self.sim.paused
 
     def write_state_to_controller(self) -> None:
+        # TODO: In case on non-synchronous controller: Fetch state data from sim
         self.mpcontroller.update_state(self.sim.sim_state)
 
     def fetch_nominal_control_spline(self) -> None:
@@ -367,10 +373,22 @@ class MPCApp:
 
     def visualize_hand_pcl(self):
         if self.is_mujoco:
-            mj_draw_spheres(self.sim.mj_viewer.user_scn,
-                            positions=self.hand_opt.hand_verts.tolist(),
-                            sizes=len(self.hand_opt.hand_verts) * [[0.005]],
-                            rgbas=len(self.hand_opt.hand_verts) * [[1, 1, 0, 1]])
+            mj_user_scn = self.sim.mj_viewer.user_scn
+            mj_draw_spheres(mj_user_scn,
+                            positions=self.hand_opt.hand_visual_verts.tolist(),
+                            sizes=len(self.hand_opt.hand_visual_verts) * [[0.005]],
+                            rgbas=len(self.hand_opt.hand_visual_verts) * [[1, 1, 0, 1]])
+
+            hand_anchors = self.hand_opt.hand_anchors.squeeze().detach().cpu().numpy().tolist()
+            mj_draw_spheres(mj_user_scn,
+                            positions=hand_anchors,
+                            sizes=len(hand_anchors) * [[0.01]],
+                            rgbas=len(hand_anchors) * [[1, 0, 0, 1]])
+            # Grasp site
+            mj_draw_spheres(mj_user_scn,
+                            positions=self.hand_opt.hand_visual_grasp_site_pos.tolist(),
+                            sizes=len(self.hand_opt.hand_visual_grasp_site_pos) * [[0.01]],
+                            rgbas=len(self.hand_opt.hand_visual_grasp_site_pos) * [[0, 0, 1, 1]])
 
     def visualize_obj_pcl(self):
         if self.is_mujoco:

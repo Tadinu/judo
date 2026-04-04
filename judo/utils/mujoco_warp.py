@@ -39,7 +39,7 @@ class MJWarpBackend:
                                          dtype=float)] * self.rollout_timesteps
         self.rollout_controls = [wp.zeros((self.mjw_data.nworld, self.mjw_model.nu),
                                           dtype=float)] * self.rollout_timesteps
-        # self.world_time = wp.zeros(model_builder.num_worlds, dtype=wp.float32)
+        # self.world_time = wp.zeros(model_builder.world_count, dtype=wp.float32)
 
         # Joint ids
         # self.joint_ids = wp.array([mj_model.joint(_).id for _ in self.joint_names], dtype=wp.int32)

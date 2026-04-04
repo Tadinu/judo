@@ -6,7 +6,7 @@ import coacd
 import open3d as o3d
 
 HAND_LAYERS_DIR = os.path.dirname(os.path.abspath(__file__))
-LEAP_LAYER_CACHE_DIR = f'{HAND_LAYERS_DIR}/cache'
+LEAP_LAYER_CACHE_DIR = f'{HAND_LAYERS_DIR}/cache/leap'
 
 
 def o3d_vox_downsample(points, voxel_size=0.005):
