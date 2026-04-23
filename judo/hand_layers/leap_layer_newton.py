@@ -1,5 +1,6 @@
 # leap_hand layer in Newton mesh
 from pathlib import Path
+from typing import Optional
 
 import warp as wp
 import torch
@@ -39,8 +40,8 @@ else:
 # All lengths are in mm and rotations in radians
 class NTLeapHandLayer(LeapHandLayer):
     def __init__(self, hand_model_desc: str,
-                 hand_base_pose: np.ndarray,
-                 joint_angles: np.ndarray,
+                 hand_base_pose: Optional[np.ndarray] = None,
+                 joint_angles: Optional[np.ndarray] = None,
                  batch_size: int = 1,
                  to_mano_frame: bool = True, show_mesh: bool = False,
                  use_collision_mesh: bool = False,
@@ -114,7 +115,7 @@ class NTLeapHandLayer(LeapHandLayer):
         # SAMPLE [self.hand_composite_points] -> [self.visible_point_indices]
         hand_whole_cvx_mesh = trimesh.util.concatenate(self.geom_convex_meshes.values())
         # Sample [hand_composite_points]
-        self.get_forward_vertices(torch.tensor(self.hand_base_pose, device=self.device),
+        self.get_forward_vertices(torch.tensor(self.mj_hand_base_pose, device=self.device),
                                   torch.tensor(self.joint_angles, device=self.device))
         self.sample_visible_points(hand_whole_cvx_mesh, self.hand_composite_points)
         print("Assets created!")

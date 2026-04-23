@@ -1,6 +1,6 @@
+import os
 import time
-import random
-from typing import Callable, Optional
+from typing import Any, Callable, Optional, Union, Sequence
 from threading import Lock
 from omegaconf import DictConfig
 from loop_rate_limiters import RateLimiter
@@ -30,8 +30,10 @@ from judo.app.structs import SplineData
 from judo.app.utils import get_class_from_string
 
 # mjmanip
+from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
-from mjmanip.utils import mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene, mj_draw_spheres
+from mjmanip.utils import (mj_body_geoms_data, mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap,
+                           mj_clear_scene, mj_draw_spheres)
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 
 # hand optimizer
@@ -118,7 +120,10 @@ class MPCApp:
             # MUJOCO-Specific controllers
             if self.is_mujoco and robot_class:
                 OBJ_NAME = robot_class.OBJECT_NAMES[0]
+                OBJ_BODY_NAMES = [OBJ_NAME]
+                OBJ_GEOM_NAMES = [f"mug_handle{i}" for i in range(4)] if OBJ_NAME == "mug" else [OBJ_NAME]
                 # Arm controller
+                self.mj_spec = self.sim.task.mj_spec
                 self.mj_model = self.sim.task.mj_sim_model
                 self.mj_data = self.sim.task.mj_data
                 self.qpos_home: Optional[np.ndarray] = robot_class.ARM_HOME_QPOS + robot_class.HAND_HOME_QPOS + \
@@ -139,37 +144,62 @@ class MPCApp:
                 self.diff_ik.DT = self.mj_model.opt.timestep
                 self.diff_ik.init()
 
+                # Object
+                self.obj = self.mj_data.body(OBJ_NAME)
+                self.obj_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in OBJ_GEOM_NAMES}
+                self.object_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data, self.mj_spec,
+                                                                 body_names=OBJ_BODY_NAMES,
+                                                                 geom_names=OBJ_GEOM_NAMES,
+                                                                 meshdir=str(os.path.join(MJMANIP_OBJECT_MODELS_DIR,
+                                                                                          OBJ_NAME)),
+                                                                 is_collision=True,
+                                                                 merging_meshes=False,
+                                                                 npoints_each_geom=500,
+                                                                 device=self.device)
+
+                # Base platform (as one of obstacles)
+                self.base_platform = self.mj_data.body(robot_class.BASE_PLATFORM_NAME)
+                self.base_platform_geoms = mj_body_geoms_data(self.mj_model, self.mj_data, self.base_platform.name)
+                self.base_platform_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data, self.mj_spec,
+                                                                        body_names=[self.base_platform.name],
+                                                                        is_collision=True,
+                                                                        npoints_each_geom=1000,
+                                                                        device=self.device)
+
                 # Hand controller
                 set_seed(0)
                 self.opt_params = HandOptimizerParams(nbatches=1, distance_lower=0.05, distance_upper=0.15,
                                                       jitter_strength=0.1,
                                                       joint_limit_lower=-np.pi / 6,
                                                       joint_limit_upper=np.pi / 6)
-
-                self.obj = self.mj_data.body(OBJ_NAME)
-                self.object_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data,
-                                                                 body_names=[self.obj.name], device=self.device)
-
-                self.base_platform = self.mj_data.body(robot_class.BASE_PLATFORM_NAME)
-                self.base_plate_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data,
-                                                                     body_names=[self.base_platform.name],
-                                                                     device=self.device)
-
-                self.hand_base = self.mj_data.body(
-                    self.robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME))
-                self.hand_opt = HandOptimizer(
-                    hand_params=HandParams.get(hand_model_name=self.robot_class.HAND_MODEL_NAME,
+                self.hand_base = self.mj_data.body(robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME))
+                if True:
+                    self.hand_opt = HandOptimizer(
+                        hand_params=HandParams(hand_model_name=self.robot_class.HAND_MODEL_NAME,
                                                xml_path=self.robot_class.HAND_XML_PATH,
-                                               joint_angles=np.array(self.mj_data.qpos[self.hand_qpos_ids],
-                                                                     dtype=np.float32),
-                                               hand_pos=self.hand_base.xpos.copy(),
-                                               hand_quat=self.hand_base.xquat.copy()),
-                    object_data=self.object_data,
-                    obstacle_data=self.base_plate_data,
-                    opt_params=self.opt_params,
-                    apply_force_closure=True,
-                    to_mano_frame=False,
-                    device=self.device)
+                                               joint_angles=torch.from_numpy(
+                                                   np.array(self.mj_data.qpos[self.hand_qpos_ids])).
+                                               float().to(device).unsqueeze(0)),
+                        object_data=self.object_data,
+                        obstacle_data=self.base_platform_data,
+                        opt_params=self.opt_params,
+                        apply_force_closure=True,
+                        to_mano_frame=False,
+                        device=self.device)
+                else:
+                    self.hand_opt = HandOptimizer(
+                        hand_params=HandParams.get(hand_model_name=self.robot_class.HAND_MODEL_NAME,
+                                                   xml_path=self.robot_class.HAND_XML_PATH,
+                                                   joint_angles=np.array(self.mj_data.qpos[self.hand_qpos_ids],
+                                                                         dtype=np.float32),
+                                                   hand_pos=self.hand_base.xpos.copy(),
+                                                   hand_quat=self.hand_base.xquat.copy()),
+                        object_data=self.object_data,
+                        obstacle_data=self.base_platform_data,
+                        opt_params=self.opt_params,
+                        apply_force_closure=True,
+                        to_mano_frame=False,
+                        device=self.device)
 
     @property
     def is_mujoco(self):
@@ -276,6 +306,20 @@ class MPCApp:
         # self.sim.nominal_action = self.controller.action(self.sim.sim_backend.sim_time)
         # print("best action", self.sim.optimal_action)
 
+    def _get_geoms_poses(self, geoms_data: dict[str, Any]) -> dict[str, Any]:
+        geom_poses = {}
+        geom_global_pos = np.zeros(3)
+        geom_global_quat = np.zeros(4)
+        for geom_name, geom_data in geoms_data.items():
+            geom_spec = self.mj_spec.geom(geom_name)
+            geom_body = self.mj_data.body(self.mj_model.geom(geom_name).bodyid[0])
+            geom_body_pose = np.concatenate([geom_body.xpos, geom_body.xquat])
+            mj.mju_mulPose(geom_global_pos, geom_global_quat,
+                           geom_body_pose[:3], geom_body_pose[3:],
+                           geom_spec.pos, geom_spec.quat)
+            geom_poses[geom_name] = np.concatenate([geom_global_pos, geom_global_quat])
+        return geom_poses
+
     def plan_arm_hand(self):
         # Hand plan
         hand_batches_num = self.hand_opt.nbatches
@@ -287,9 +331,8 @@ class MPCApp:
                   .repeat(hand_batches_num, 1, 1))
         next_grasp = self.hand_opt.step_optimize(cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
                                                  cur_wrist_rot=cur_wrist_rot,
-                                                 cur_obj_mesh_poses=[np.concatenate([self.obj.xpos, self.obj.xquat])],
-                                                 cur_obst_mesh_poses=[np.concatenate([self.base_platform.xpos,
-                                                                                      self.base_platform.xquat])])
+                                                 cur_obj_geom_poses=self._get_geoms_poses(self.obj_geoms),
+                                                 cur_obst_geom_poses=self._get_geoms_poses(self.base_platform_geoms))
         self.mj_robot_ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles
         mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
                       pos=next_grasp.wrist_pos, quat=next_grasp.wrist_quat)
@@ -371,24 +414,29 @@ class MPCApp:
         if self.mpcontroller.traces is not None and len(self.mpcontroller.traces) > 0:
             pass
 
+    @classmethod
+    def _draw_points(cls, mj_scene: mj.MjvScene, points: Union[np.ndarray, Sequence[float]], size: list[float],
+                     color: list[float]):
+        if isinstance(points, np.ndarray):
+            assert len(points.shape) == 2
+        npoints = len(points)
+        mj_draw_spheres(mj_scene, positions=points,
+                        sizes=npoints * [size], rgbas=npoints * [color])
+
     def visualize_hand_pcl(self):
         if self.is_mujoco:
             mj_user_scn = self.sim.mj_viewer.user_scn
-            mj_draw_spheres(mj_user_scn,
-                            positions=self.hand_opt.hand_visual_verts.tolist(),
-                            sizes=len(self.hand_opt.hand_visual_verts) * [[0.005]],
-                            rgbas=len(self.hand_opt.hand_visual_verts) * [[1, 1, 0, 1]])
+            self._draw_points(mj_user_scn, self.hand_opt.hand_visual_verts, size=[0.005], color=[1, 1, 0, 1])
+            hand_anchors = self.hand_opt.hand_anchors.squeeze().detach().cpu().numpy()
+            self._draw_points(mj_user_scn, hand_anchors, size=[0.01], color=[1, 0, 0, 1])
 
-            hand_anchors = self.hand_opt.hand_anchors.squeeze().detach().cpu().numpy().tolist()
-            mj_draw_spheres(mj_user_scn,
-                            positions=hand_anchors,
-                            sizes=len(hand_anchors) * [[0.01]],
-                            rgbas=len(hand_anchors) * [[1, 0, 0, 1]])
             # Grasp site
-            mj_draw_spheres(mj_user_scn,
-                            positions=self.hand_opt.hand_visual_grasp_site_pos.tolist(),
-                            sizes=len(self.hand_opt.hand_visual_grasp_site_pos) * [[0.01]],
-                            rgbas=len(self.hand_opt.hand_visual_grasp_site_pos) * [[0, 0, 1, 1]])
+            if self.hand_opt.hand_visual_grasp_site_pos is not None:
+                self._draw_points(mj_user_scn, self.hand_opt.hand_visual_grasp_site_pos, size=[0.01],
+                                  color=[0, 0, 1, 1])
+            if self.hand_opt.hand_visual_grasp_direction_site_pos is not None:
+                self._draw_points(mj_user_scn, self.hand_opt.hand_visual_grasp_direction_site_pos, size=[0.01],
+                                  color=[1, 0, 1, 1])
 
     def visualize_obj_pcl(self):
         if self.is_mujoco:

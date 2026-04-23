@@ -12,54 +12,63 @@ import torch
 import mujoco as mj
 
 # mjmanip
-from mjmanip.utils import IDENTITY_POSE
+from mjmanip.utils import IDENTITY_POSE, mj_model_name, mj_pose_to_mat
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
+from mjmanip.pytorch3d_utils import p3d_transform_points
 
 
 @dataclass
 class ObjectData:
-    points: list[torch.Tensor]
-    normals: list[torch.Tensor]
-    meshes: list[trimesh.Trimesh]
-    poses: list[np.ndarray]
-    mesh_filepath: str = None
+    geom_points: dict[str, torch.Tensor]
+    geom_normals: dict[str, torch.Tensor]
+    geom_meshes: dict[str, trimesh.Trimesh]
+    geom_tfs: dict[str, np.ndarray]  # mat 4x4
+    geom_mesh_paths: Optional[dict[str, str]] = None
     scale: float = 1.0
-    mesh_paths: Optional[list[str]] = None
+    npoints_each_geom: int = 1000
 
     @classmethod
-    def get_meshes_data(cls, mesh_paths: list[str], voxel_size=0.006, scale=1.0, vis=False, watertight_process=True,
-                        device: Union[torch.device, str] = 'cuda',
-                        **kwargs) -> ObjectData:
-        meshes = []
-        points = []
-        normals = []
-        for mesh_path in mesh_paths:
-            mesh = trimesh.load_mesh(mesh_path)
-            meshes.append(mesh)
+    def get_geoms_data(cls, geom_mesh_paths: dict[str, str], voxel_size=0.006, scale=1.0, vis=False,
+                       watertight_process=True,
+                       npoints_each_geom: int = 1000,
+                       device: Union[torch.device, str] = 'cuda') -> ObjectData:
+        geom_meshes = {}
+        geom_points = {}
+        geom_normals = {}
+        geom_tfs = {}
+        for geom_name, geom_mesh_path in geom_mesh_paths.items():
+            geom_mesh = trimesh.load_mesh(geom_mesh_path)
+            geom_meshes[geom_name] = geom_mesh
             # scale the object mesh
-            mesh.vertices *= scale
+            geom_mesh.vertices *= scale
 
             # Sample mesh with [watertight_process]
-            v_sampled, n_sampled = get_watertight_vertices_normals(mesh, voxel_size, watertight_process,
-                                                                   mesh_path, vis)
-            points.append(torch.tensor(v_sampled, dtype=torch.float32, device=device))
-            normals.append(torch.tensor(n_sampled, dtype=torch.float32, device=device))
+            v_sampled, n_sampled = get_watertight_vertices_normals(geom_mesh, voxel_size, watertight_process,
+                                                                   geom_mesh_path, npoints_each_geom, vis)
+            geom_points[geom_name] = torch.tensor(v_sampled, dtype=torch.float32, device=device)
+            geom_normals[geom_name] = torch.tensor(n_sampled, dtype=torch.float32, device=device)
+            geom_tfs[geom_name] = np.eye(4)
 
-        return ObjectData(points=points,
-                          normals=normals,
-                          mesh_paths=mesh_paths,
-                          meshes=meshes,  # scaled mesh
-                          poses=[IDENTITY_POSE] * len(meshes),
-                          scale=scale)
+        return ObjectData(geom_points=geom_points,
+                          geom_normals=geom_normals,
+                          geom_mesh_paths=geom_mesh_paths,
+                          geom_meshes=geom_meshes,  # scaled mesh
+                          geom_tfs=geom_tfs,
+                          scale=scale,
+                          npoints_each_geom=npoints_each_geom)
 
     @classmethod
     def get_mj_object_data(cls, mj_model: Union[mj.MjModel, str], mj_data: Optional[mj.MjData] = None,
+                           mj_spec: Optional[mj.MjSpec] = None,
+                           meshdir: Optional[str] = None,
                            body_names: Optional[list[str]] = None,
+                           geom_names: Optional[list[str]] = None,
                            voxel_size: float = 0.006, scale: float = 1.0,
-                           merging_meshes: bool = True,
+                           merging_meshes: bool = False,
+                           npoints_each_geom: int = 1000,
+                           is_collision: bool = False,
                            visualized: bool = False,
                            device: Union[torch.device, str] = 'cuda') -> ObjectData:
-        mj_spec: mj.MjSpec = None
         if isinstance(mj_model, str):
             assert mj_model.endswith('.xml')
             mj_spec = mj.MjSpec.from_file(mj_model)
@@ -72,84 +81,90 @@ class ObjectData:
         if not body_names:
             body_names = [mj_model.body(i).name for i in range(mj_model.nbody)]
             body_names.remove('world')
-        meshes = []
-        mesh_poses = []
-        for _, m in mj_get_body_trimeshes(mj_model, data=mj_data, model_spec=mj_spec, body_names=body_names,
-                                          use_global_pose=True, is_collision=True).items():
-            meshes.append(m[0])
-            mesh_poses.append(m[1])
+        geom_meshes: dict[str, trimesh.Trimesh] = {}
+        geom_mesh_paths: dict[str, str] = {}
+        geom_tfs: dict[str, np.ndarray] = {}
+        for geom_name, m in mj_get_body_trimeshes(mj_model, data=mj_data, model_spec=mj_spec, meshdir=meshdir,
+                                                  body_names=body_names, geom_names=geom_names,
+                                                  use_global_pose=True, is_collision=is_collision).items():
+            geom_meshes[geom_name] = m[0]
+            geom_mesh_paths[geom_name] = m[1]
+            geom_tfs[geom_name] = m[2]
         if merging_meshes:
-            meshes = [trimesh.util.concatenate(meshes)]
+            model_name = mj_model_name(mj_model)
+            geom_meshes = {model_name: trimesh.util.concatenate(geom_meshes.values())}
             base_body = mj_model.body(body_names[0])
             base_body_data = mj_data.body(body_names[0]) if mj_data else None
-            mesh_poses = [np.concat([base_body_data.xpos, base_body_data.xquat]) if base_body_data \
-                              else np.concat([base_body.pos, base_body.quat])]
-
-        if visualized:
-            trimesh.Scene(meshes).show()
+            geom_tfs[model_name] = mj_pose_to_mat(np.concat([base_body_data.xpos, base_body_data.xquat]) \
+                                                      if base_body_data else np.concat([base_body.pos, base_body.quat]))
 
         # Sample meshes' points
-        points = []
-        normals = []
-        for mesh in meshes:
+        geom_points = {}
+        geom_normals = {}
+        for geom_name, geom_mesh in geom_meshes.items():
             # scale the object mesh
-            mesh.vertices *= scale
+            geom_mesh.vertices *= scale
 
             # Sample mesh with [watertight_process]
-            v_sampled, n_sampled = get_watertight_vertices_normals(mesh, voxel_size, watertight_process=True)
-            points.append(torch.tensor(v_sampled, dtype=torch.float32, device=device))
-            normals.append(torch.tensor(n_sampled, dtype=torch.float32, device=device))
+            v_sampled, n_sampled = get_watertight_vertices_normals(geom_mesh, voxel_size, watertight_process=True,
+                                                                   nsample_points=npoints_each_geom)
+            geom_points[geom_name] = torch.tensor(v_sampled, dtype=torch.float32, device=device)
+            geom_normals[geom_name] = torch.tensor(n_sampled, dtype=torch.float32, device=device)
 
-        return ObjectData(points=points,
-                          normals=normals,
-                          mesh_paths=None,
-                          meshes=meshes,  # already scaled meshes
-                          poses=mesh_poses,
+        if visualized:
+            trimesh.Scene(geom_meshes).show()
+            trimesh.Scene(trimesh.PointCloud(torch.cat(list(geom_points.values())).detach().cpu().numpy())).show()
+        return ObjectData(geom_points=geom_points,
+                          geom_normals=geom_normals,
+                          geom_mesh_paths=geom_mesh_paths,
+                          geom_meshes=geom_meshes,  # already scaled meshes
+                          geom_tfs=geom_tfs,
                           scale=scale)
 
     @property
     def all_points(self) -> torch.Tensor:
-        return torch.cat(self.points)
+        return torch.cat(list(self.geom_points.values()))
 
     @property
     def all_normals(self) -> torch.Tensor:
-        return torch.cat(self.normals)
+        return torch.cat(list(self.geom_normals.values()))
 
-    def transform_to(self, new_poses: list[np.ndarray], resample: bool = False):
-        assert len(new_poses) == len(self.meshes)
-        device = self.points[0].device
-        for i, mesh in enumerate(self.meshes):
-            # Old mesh pose
-            old_mesh_pose = self.poses[i]
-            old_mesh_transf = trimesh.transformations.quaternion_matrix(old_mesh_pose[3:])
-            old_mesh_transf[:3, 3] = old_mesh_pose[:3]
+    def transform_to(self, new_geom_poses: dict[str, np.ndarray], resample: bool = False):
+        assert new_geom_poses.keys() == self.geom_meshes.keys()
+        new_geom_tfs = {}
+        for geom_name, geom_mesh in self.geom_meshes.items():
+            device = self.geom_points[geom_name].device
+            # print("ObjectData.transform_to", geom_name, self.geom_mesh_paths[geom_name])
 
-            # New mesh pose
-            new_mesh_pose = new_poses[i]
-            new_mesh_transf = trimesh.transformations.quaternion_matrix(new_mesh_pose[3:])
-            new_mesh_transf[:3, 3] = new_mesh_pose[:3]
+            # Cur geom pose
+            cur_geom_tf = self.geom_tfs[geom_name]
+
+            # New geom pose
+            new_geom_pose = new_geom_poses[geom_name]
+            new_geom_tf = mj_pose_to_mat(new_geom_pose)
+            new_geom_tfs[geom_name] = new_geom_tf
 
             # Apply [new_pose] to mesh in place
-            delta_tf = new_mesh_transf @ np.linalg.inv(old_mesh_transf)
+            delta_tf = new_geom_tf @ np.linalg.inv(cur_geom_tf)
 
             # Resample the mesh
             # NOTE: points & normals dtype are torch.float32 or float32 for convenient operations later
             if resample:
-                mesh.apply_transform(delta_tf)
-                v_sampled, n_sampled = sample_mesh_surface(mesh)
+                geom_mesh.apply_transform(delta_tf)
+                v_sampled, n_sampled = sample_mesh_surface(geom_mesh)
                 # NOTE: Points, normals can have new lengths so not copying here
-                self.points[i] = torch.tensor(v_sampled, dtype=torch.float32, device=device)
-                self.normals[i] = torch.tensor(n_sampled, dtype=torch.float32, device=device)
+                self.geom_points[geom_name] = torch.tensor(v_sampled, dtype=torch.float32, device=device)
+                self.geom_normals[geom_name] = torch.tensor(n_sampled, dtype=torch.float32, device=device)
             else:
                 delta_tf_torch = torch.tensor(delta_tf, dtype=torch.float32, device=device)
                 R = delta_tf_torch[:3, :3]
                 t = delta_tf_torch[:3, 3]
-                self.points[i].copy_(self.points[i] @ R.T + t)
-                self.normals[i].copy_(torch.nn.functional.normalize(self.normals[i] @ R.T, dim=-1))
-        self.poses = new_poses
+                self.geom_points[geom_name] = self.geom_points[geom_name] @ R.T + t
+                self.geom_normals[geom_name] = torch.nn.functional.normalize(self.geom_normals[geom_name] @ R.T, dim=-1)
+        self.geom_tfs = new_geom_tfs
 
     def visualize(self):
-        trimesh.Scene(self.meshes).show()
+        trimesh.Scene(self.geom_meshes).show()
         trimesh.Scene(trimesh.PointCloud(self.all_points.cpu().numpy())).show()
 
 
@@ -177,6 +192,7 @@ def get_stable_pose(mesh):
 def get_watertight_vertices_normals(mesh: trimesh.Trimesh, voxel_size: float,
                                     watertight_process: bool = True,
                                     mesh_filepath: Optional[str] = None,
+                                    nsample_points: int = 1000,
                                     vis: bool = False) -> tuple[torch.Tensor, torch.Tensor]:
     if watertight_process:
         if mesh.is_watertight:
@@ -201,7 +217,7 @@ def get_watertight_vertices_normals(mesh: trimesh.Trimesh, voxel_size: float,
             # vw, fw = pcu.make_mesh_watertight(mesh.vertices, mesh.faces, resolution=50000)
             # mesh = trimesh.Trimesh(vertices=vw, faces=fw)
 
-    v_sampled, n_sampled = sample_mesh_surface(mesh, voxel_size)
+    v_sampled, n_sampled = sample_mesh_surface(mesh, voxel_size, nsample_points)
     if vis:
         print('points shape is :', v_sampled.shape)
         import open3d as o3d
@@ -225,12 +241,12 @@ def get_watertight_vertices_normals(mesh: trimesh.Trimesh, voxel_size: float,
     return v_sampled, n_sampled
 
 
-def sample_mesh_surface(mesh: Union[trimesh.Trimesh, trimesh.Scene], voxel_size=0.006):
+def sample_mesh_surface(mesh: Union[trimesh.Trimesh, trimesh.Scene], voxel_size=0.006, nsample_points: int = 50000):
     # points, face_index = trimesh.sample.sample_surface(mesh, 50000)
     # normals = mesh.face_normals[face_index]
     # v = np.array(points).astype(np.float32)
     # n = np.array(normals).astype(np.float32)
-    point_cloud = get_surface_point_cloud(mesh, scan_count=25, scan_resolution=150, sample_point_count=50000)
+    point_cloud = get_surface_point_cloud(mesh, scan_count=25, scan_resolution=150, sample_point_count=nsample_points)
     v = point_cloud.points.astype(np.float32)
     n = point_cloud.normals.astype(np.float32)
 

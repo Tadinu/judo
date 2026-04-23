@@ -39,6 +39,8 @@ def set_seed(seed):
 
 
 if __name__ == "__main__":
+    from pathlib import Path
+
     set_seed(0)
     CUR_DIR = os.path.dirname(os.path.abspath(__file__))
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -59,7 +61,8 @@ if __name__ == "__main__":
         filepath_list = glob.glob('{}/*.obj'.format(mesh_dir))
 
     for obj_filepath in filepath_list:
-        object_data = ObjectData.get_meshes_data([obj_filepath], device=device) if obj_filepath.endswith('.obj') else (
+        object_data = ObjectData.get_geoms_data({Path(obj_filepath).stem: obj_filepath}, device=device) \
+            if obj_filepath.endswith('.obj') else (
             ObjectData.get_mj_object_data(obj_filepath, body_names=['mug'] if use_mug else None,
                                           device=device))
         # object_data.visualize()
@@ -68,8 +71,9 @@ if __name__ == "__main__":
                                                             xml_path=HAND_XML_PATH,
                                                             joint_angles=np.zeros(PANDA_LEAP.HAND_DOFS_NO,
                                                                                   dtype=np.float32),
-                                                            hand_pos=np.array([0, 0, 0], dtype=np.float32),
-                                                            hand_quat=np.array([0.71, 0.71, 0, 0], dtype=np.float32)),
+                                                            hand_pos=np.zeros(3),
+                                                            hand_quat=np.array([0.71, 0.71, 0, 0]),
+                                                            nbatches=BATCHES_NUM),
                                  object_data=object_data,
                                  opt_params=opt_params,
                                  device=device)
@@ -83,7 +87,7 @@ if __name__ == "__main__":
                 else roma.unitquat_to_rotmat(torch.tensor([0.71, 0.71, 0, 0])).repeat(BATCHES_NUM, 1, 1)
             grasp = hand_opt.step_optimize(cur_wrist_pos=np.tile([0, 0, 0.1], (BATCHES_NUM, 1)),
                                            cur_wrist_rot=new_wrist_rot,
-                                           cur_obj_mesh_poses=[np.array([0, 0, 0, 1, 0, 0, 0])],
+                                           cur_obj_geom_poses=[np.array([0, 0, 0, 1, 0, 0, 0])],
                                            substeps_num=200)
 
         # Visualize

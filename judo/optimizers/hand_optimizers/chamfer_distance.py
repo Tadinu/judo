@@ -3,7 +3,6 @@
 from typing import Union
 
 import torch
-import torch.nn.functional as F
 from pytorch3d.ops.knn import knn_gather, knn_points
 from pytorch3d.structures.pointclouds import Pointclouds
 

@@ -59,10 +59,10 @@ def run_app(headless: bool) -> None:
 
 
 if __name__ == "__main__":
-    headless = False
-    if headless:
+    app_headless = False
+    if app_headless:
         with Xvfb(width=1920, height=1080) as xvfb:
             print(f"Using Xvfb display: {xvfb.new_display}")
-            run_app(headless)
+            run_app(app_headless)
     else:
-        run_app(headless)
+        run_app(app_headless)

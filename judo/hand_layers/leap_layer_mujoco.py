@@ -13,7 +13,7 @@ import mujoco_warp as mjw
 import pytorch_kinematics as pk
 import pytorch3d.structures
 from pytorch3d.transforms import matrix_to_quaternion as p3d_matrix_to_quaternion
-import roma
+# import roma
 
 # judo
 from judo import PACKAGE_ROOT
@@ -23,7 +23,7 @@ from judo.hand_layers.leap_layer import LeapHandLayer, LeapAnchor
 from mjmanip.utils import IDENTITY_POSE, mj_step, mj_draw_pointcloud
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.warp_utils import wp_transform_from_mj, wp_kernel_transform_mesh_points, wp_kernel_compute_vertex_normals
-from mjmanip.pytorch3d_utils import mjw_geoms_to_pytorch3d_meshes
+from mjmanip.pytorch3d_utils import p3d_transform_points, mjw_geoms_to_pytorch3d_meshes
 from mjmanip.control.fabrics.prod.kinematics import Kinematics as TorchWarpKinematics
 from mjmanip.control.fabrics.taskmaps.robot_frame_origins_taskmap import RobotKinematics as RobotTorchWarpKinematics
 
@@ -48,8 +48,8 @@ else:
 
 class MJLeapHandLayer(LeapHandLayer):
     def __init__(self, hand_model_desc: str,
-                 hand_base_pose: np.ndarray,
-                 joint_angles: np.ndarray,
+                 hand_base_pose: Optional[np.ndarray] = None,
+                 joint_angles: Optional[np.ndarray] = None,
                  batch_size: int = 1,
                  to_mano_frame: bool = False, show_mesh: bool = False,
                  use_collision_mesh: bool = False,
@@ -79,16 +79,17 @@ class MJLeapHandLayer(LeapHandLayer):
         self.mjw_model = mjw.put_model(self.mj_model)
         self.mjw_data = mjw.put_data(self.mj_model, self.mj_data, nworld=1, njmax=300)
 
-        self.torch_warp_kinematics = TorchWarpKinematics(self.hand_model_desc, self.batch_size,
-                                                         thread_across_links=False,
-                                                         device=self.device,
-                                                         robot_base_transform=wp_transform_from_mj(
-                                                             self.hand_base_pose.squeeze()),
-                                                         frame_names=self.hand_body_names)
+        if False:
+            self.torch_warp_kinematics = TorchWarpKinematics(self.hand_model_desc, self.batch_size,
+                                                             thread_across_links=False,
+                                                             device=self.device,
+                                                             robot_base_transform=wp_transform_from_mj(
+                                                                 self.hand_params.wrist_pose.squeeze()),
+                                                             frame_names=self.hand_body_names)
 
-        self.torch_warp_link_idxs = torch.tensor(
-            [self.torch_warp_kinematics.get_link_index(body_name) for body_name in self.hand_body_names],
-            device=self.device)
+            self.torch_warp_link_idxs = torch.tensor(
+                [self.torch_warp_kinematics.get_link_index(body_name) for body_name in self.hand_body_names],
+                device=self.device)
 
         # Joints
         self.joint_lowers = self.chain.low
@@ -135,7 +136,7 @@ class MJLeapHandLayer(LeapHandLayer):
             self.create_mesh_verts_normals(self.hand_surface_points, self.visible_point_indices))
 
         # Fetch hand segment indices
-        self.hand_segment_indices, self.hand_finger_indices = self.get_hand_segment_indices()
+        self.hand_segment_indices, self.hand_finger_indices = self.get_hand_segment_indices(self.ori_geom_meshes_points)
 
     def create_assets(self):
         '''
@@ -162,12 +163,13 @@ class MJLeapHandLayer(LeapHandLayer):
         self.save_geom_convex_meshes(self.geom_convex_meshes)
 
         # 3.1- Sample [self.hand_composite_points] + [self.hand_surface_points] from GLOBALLY POSED MESHES
+        # NOTE: [npoints] here is for each geom mesh of the hand, not for the whole hand!
         self.hand_composite_points, self.hand_surface_points, hand_whole_mesh = (
-            self.sample_composite_points(self.hand_base_pose, self.joint_angles))
+            self.sample_composite_points(self.mj_init_hand_base_pose, self.mj_init_joint_anges, npoints_each_geom=200))
 
         # 3.2- Sample visible composite points
         self.visible_point_indices = self.sample_visible_points(hand_whole_mesh, self.hand_composite_points,
-                                                                down_sampling=self.use_collision_mesh)
+                                                                down_sampling=False)
         if self.visualized:
             trimesh.Scene(hand_whole_mesh).show()
             # Visualize hand surface points, which are still GLOBAL now
@@ -231,14 +233,30 @@ class MJLeapHandLayer(LeapHandLayer):
                                                     dim=-1).float()
         return mesh_points, mesh_normals
 
-    def sample_composite_points(self, hand_base_pose: np.ndarray, hand_qpos: np.ndarray, n_points: int = int(2e+4)) \
+    def get_hand_segment_indices(self, geom_mesh_points: dict[str, torch.Tensor]) \
+            -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
+        hand_segment_indices = {}
+        hand_finger_indices = {}
+        segment_start = 0  # torch.tensor(0, dtype=torch.long, device=self.device)
+        finger_start = 0  # torch.tensor(0, dtype=torch.long, device=self.device)
+        for geom_name, geom_points in geom_mesh_points.items():
+            end = segment_start + geom_points.shape[0]
+            hand_segment_indices[geom_name] = torch.arange(segment_start, end)  # [segment_start, end]
+            if geom_name in self.ordered_finger_endeffort:
+                hand_finger_indices[geom_name] = torch.arange(finger_start, end)  # [finger_start, end]
+                finger_start = end
+            segment_start = end
+        return hand_segment_indices, hand_finger_indices
+
+    def sample_composite_points(self, hand_base_pose: np.ndarray, hand_qpos: np.ndarray,
+                                npoints_each_geom: int = int(2e+4)) \
             -> tuple[dict[str, np.ndarray], dict[str, np.ndarray], trimesh.Trimesh]:
         global_posed_meshes = mj_get_body_trimeshes(self.mj_model,
                                                     data=self.mj_data,
                                                     model_spec=self.mj_spec,
                                                     body_names=self.hand_body_names,
-                                                    base_pose=hand_base_pose.squeeze(),
-                                                    qpos=hand_qpos.squeeze(),
+                                                    base_pose=hand_base_pose[0],
+                                                    qpos=hand_qpos[0],
                                                     is_collision=self.use_collision_mesh,
                                                     use_convex_hull=True,
                                                     use_global_pose=True)
@@ -251,7 +269,7 @@ class MJLeapHandLayer(LeapHandLayer):
             hand_meshes.append(geom_mesh)
 
             # Sample [self.hand_surface_points]
-            points, point_normals = self.sample_geom_surface_points(geom_mesh, n_points=n_points)
+            points, point_normals = self.sample_geom_surface_points(geom_mesh, npoints=npoints_each_geom)
             hand_composite_points[geom_name] = points
             hand_surface_points[geom_name] = np.concatenate([points, point_normals], axis=-1)
 
@@ -299,12 +317,11 @@ class MJLeapHandLayer(LeapHandLayer):
 
             # hand_base_pose * link_pose * link_geom_verts/normals
             vertices = self.ori_geom_meshes_points[geom_name]
-            batch_vertices = torch.matmul(geom_global_pose, vertices.transpose(0, 1)).transpose(1, 2)[..., :3]
+            batch_vertices = p3d_transform_points(vertices, geom_global_pose)
             verts.append(batch_vertices)
             vertex_normals = self.ori_geom_meshes_point_normals[geom_name]
-            geom_global_pose[:, :3, 3] *= 0
-            batch_vertex_normals = (
-                torch.matmul(geom_global_pose, vertex_normals.transpose(0, 1)).transpose(1, 2)[..., :3])
+            geom_global_pose[:, :3, 3] *= 0  # Clear pos due to normals only requiring orientation info
+            batch_vertex_normals = p3d_transform_points(vertex_normals, geom_global_pose)
             verts_normal.append(batch_vertex_normals)
 
         verts = torch.cat(verts, dim=1).contiguous()
@@ -386,18 +403,17 @@ if __name__ == "__main__":
     import math
     from mujoco import viewer
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    torch_device = 'cuda' if torch.cuda.is_available() else 'cpu'
     pick_anchor_points = True
-    hand_qpos = np.zeros((1, LEAP.HAND_DOFS_NO), dtype=np.float32)
-    hand_base_pose = np.array([0, 0, 5, 1, 0, 0, 0])[np.newaxis]
     mj_hand_layer = MJLeapHandLayer(hand_model_desc=HAND_XML_PATH,
-                                    hand_base_pose=hand_base_pose,
-                                    joint_angles=hand_qpos,
+                                    hand_base_pose=np.array([0, 0, 5, 1, 0, 0, 0], dtype=np.float32)[np.newaxis],
+                                    joint_angles=np.zeros((1, LEAP.HAND_DOFS_NO), dtype=np.float32),
                                     use_collision_mesh=False,
                                     regen_cache=True,
                                     visualized=True,
-                                    device=device)
+                                    device=torch_device)
     mj_hand_layer.make_contact_points = False
+    mj_hand_layer.init_kinematics()
     model = mj_hand_layer.mj_model
     data = mj_hand_layer.mj_data
     rate = RateLimiter(frequency=1 / model.opt.timestep, warn=False)
@@ -417,8 +433,8 @@ if __name__ == "__main__":
                     torch.rand(1, LEAP.HAND_DOFS_NO, device=device).double().requires_grad_(True))))
             verts, normals = mj_hand_layer.get_forward_vertices(
                 hand_base_pose=torch.tensor([math.sin(i) * 0.5, math.cos(i) * 0.5, 3, 1, 0, 0, 0],
-                                            device=device).unsqueeze(0).requires_grad_(True),
-                hand_qpos=torch.rand(1, LEAP.HAND_DOFS_NO, device=device).requires_grad_(True))
+                                            device=torch_device).unsqueeze(0).requires_grad_(True),
+                hand_qpos=torch.rand(1, LEAP.HAND_DOFS_NO, device=torch_device).requires_grad_(True))
             mj_draw_pointcloud(mj_viewer.user_scn, verts.detach().cpu().numpy().squeeze())
 
             if pick_anchor_points:

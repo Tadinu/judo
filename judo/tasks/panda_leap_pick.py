@@ -129,7 +129,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             for arm_geom in PANDA_LEAP.ARM_GEOMS_NAMES
         ]
 
-        self.mpc_threshold = 0.03
+        self.mpc_threshold = 0.05
         self.reach_threshold_squared = 0.015
         self.orientation_threshold = 0.01
         self.last_obj_distance_to_goal = 0.

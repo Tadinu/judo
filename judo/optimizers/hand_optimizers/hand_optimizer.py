@@ -1,6 +1,6 @@
 # Ref: https://github.com/DexGraspOpt/DexGraspSyn
 from dataclasses import dataclass
-from typing import Any, Optional, Union
+from typing import Optional, Union
 import numpy as np
 
 # torch
@@ -38,7 +38,8 @@ from judo.hand_layers.leap_layer import LeapAnchor
 
 # mjmanip
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
-from mjmanip.pytorch3d_utils import mjw_geoms_to_pytorch3d_meshes, p3d_to_trimesh
+from mjmanip.pytorch3d_utils import (p3d_transform_points, p3d_stable_angle_between_vectors,
+                                     mjw_geoms_to_pytorch3d_meshes, p3d_to_trimesh)
 from mjmanip.o3d_utils import o3d_vox_downsample
 
 
@@ -66,20 +67,28 @@ class HandParams:
 
     @classmethod
     def get(cls, hand_model_name: str, xml_path: str,
-            joint_angles: np.ndarray[np.float32],
-            hand_pos: np.ndarray[np.float32], hand_quat: np.ndarray[np.float32], device: str = 'cuda'):
-        wrist_quat = torch.from_numpy(hand_quat).to(device).unsqueeze(0)
+            joint_angles: np.ndarray,
+            hand_pos: np.ndarray, hand_quat: np.ndarray,
+            nbatches: int = 1,
+            device: str = 'cuda'):
+        def float_torch_tensor(x: np.ndarray) -> torch.Tensor:
+            return torch.from_numpy(x).to(device=device, dtype=torch.float32).repeat(nbatches, 1)
+
+        wrist_quat = float_torch_tensor(hand_quat)
         return HandParams(hand_model_name=hand_model_name,
                           xml_path=xml_path,
-                          joint_angles=torch.from_numpy(joint_angles).to(device).unsqueeze(0),
-                          wrist_pos=torch.from_numpy(hand_pos).to(device).unsqueeze(0),
+                          joint_angles=float_torch_tensor(joint_angles),
+                          wrist_pos=float_torch_tensor(hand_pos),
                           wrist_quat_wxyz=wrist_quat,
                           wrist_rot6d=compute_rotation_ortho6d_from_matrix(
                               roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(wrist_quat))))
 
     @property
     def wrist_pose(self) -> torch.Tensor:
-        return torch.cat([self.wrist_pos, self.wrist_quat_wxyz], dim=-1).squeeze()
+        wrist_pos = self.wrist_pos if self.wrist_pos else torch.zeros(1, 3, device='cuda')
+        wrist_quat_wxyz = self.wrist_quat_wxyz if self.wrist_quat_wxyz else torch.tensor([1, 0, 0, 0],
+                                                                                         device='cuda').repeat(1, 1)
+        return torch.cat([wrist_pos, wrist_quat_wxyz], dim=-1)
 
 
 @dataclass
@@ -88,7 +97,7 @@ class HandGrasp:
     wrist_pos: Optional[np.ndarray] = None
     joint_angles: Optional[np.ndarray] = None
     obj_scale: float = 1.0
-    obj_mesh_paths: Optional[list[str]] = None
+    obj_mesh_paths: Optional[dict[str, str]] = None
 
     @property
     def wrist_pose(self):
@@ -98,6 +107,9 @@ class HandGrasp:
 class HandOptimizer(torch.nn.Module):
     """Custom Pytorch model for gradient-base grasp optimization.
     """
+
+    def float_torch_tensor(self, x: np.ndarray) -> torch.Tensor:
+        return torch.from_numpy(x).to(device=self.device, dtype=torch.float32).repeat(self.nbatches, 1)
 
     def __init__(self, hand_params: HandParams,
                  object_data: Optional[ObjectData] = None,
@@ -124,36 +136,50 @@ class HandOptimizer(torch.nn.Module):
         self.hand_model_name = hand_params.hand_model_name
         self.hand_anchors: torch.Tensor = None
         self.hand_anchors_normals: torch.Tensor = None
+        self.contact_idx: torch.Tensor = None
+        self.contact_weight: torch.Tensor = None
         self.parallel_contact_points = hand_params.parallel_contact_point
 
         # 1- Init hand layer
-        self.hand_layer, self.hand_anchor_layer = self._init_hand_layer(hand_params.wrist_pose.cpu().numpy(),
-                                                                        hand_params.joint_angles.cpu().numpy(),
-                                                                        to_mano_frame)
+        self.hand_layer, self.hand_anchor_layer = (
+            self._init_hand_layer(hand_params.wrist_pose.cpu().numpy()
+                                  if hand_params.wrist_pose is not None else None,
+                                  hand_params.joint_angles.cpu().numpy()
+                                  if hand_params.joint_angles is not None else None,
+                                  to_mano_frame))
         self.use_mano_frame = self.hand_layer.to_mano_frame
         self.hand_visual_verts: np.ndarray = None
         self.hand_visual_vert_normals: np.ndarray = None
         self.hand_visual_grasp_site_pos: np.ndarray = None
+        self.hand_visual_grasp_direction_site_pos: np.ndarray = None
 
-        # 2- Grasp space (obj + hand_params' wrist_pose, joint_angles)
+        # 2- Grasp space (obj + self.hand_layer, hand_params' wrist pose, joint angles (theta)),
         self._initialize_grasp_space(self.hand_layer, hand_params)
+        # 2.1- Init Hand layer's kinematics given possibly updated wrist pose, joint angles in the inited grasp space
+        self.hand_layer.init_kinematics()
 
         # 3- Hand optimizing configs
         self._init_hand_opt(hand_params)
 
-        # Grasp site
+        # Grasp sites
+        pad_one = torch.ones((self.nbatches, 1), dtype=torch.float32, device=self.device)
         grasp_site = self.hand_layer.mj_model.site("grasp_site")
         self.grasp_site_local_pos = (
-            torch.cat([torch.from_numpy(grasp_site.pos).repeat(self.nbatches, 1).float().to(device=self.device),
-                       torch.ones((self.nbatches, 1), device=self.device)], dim=-1).float())
+            torch.cat([self.float_torch_tensor(grasp_site.pos), pad_one], dim=-1))
 
-    def _init_hand_layer(self, hand_base_pose: np.ndarray, joint_angles: np.ndarray, to_mano_frame: bool = False) \
+        grasp_direction_site = self.hand_layer.mj_model.site("direction_grasp_site")
+        self.grasp_direction_site_local_pos = (
+            torch.cat([self.float_torch_tensor(grasp_direction_site.pos), pad_one], dim=-1))
+
+    def _init_hand_layer(self, hand_base_pose: Optional[np.ndarray] = None, joint_angles: Optional[np.ndarray] = None,
+                         to_mano_frame: bool = False) \
             -> Optional[tuple[LeapHandLayer, LeapAnchor]]:
         if "leap" in self.hand_model_name:
             hand_model_desc = self.hand_params.xml_path or self.hand_params.urdf_path
             hand_layer = LeapHandLayer(hand_model_desc=hand_model_desc,
                                        hand_base_pose=hand_base_pose,
                                        joint_angles=joint_angles,
+                                       batch_size=self.nbatches,
                                        to_mano_frame=to_mano_frame,
                                        use_collision_mesh=False,
                                        regen_cache=False,
@@ -181,7 +207,8 @@ class HandOptimizer(torch.nn.Module):
         # Wrist pose
         self.cur_wrist_pos = hand_params.wrist_pos.clone()
         self.cur_wrist_rot = (hand_params.wrist_quat_wxyz if self.use_quat else hand_params.wrist_rot6d).clone()
-        self.cur_wrist_pose = torch.eye(4).reshape(-1, 4, 4).repeat(self.nbatches, 1, 1).float().to(self.device)
+        self.cur_wrist_pose = (torch.eye(4, device=self.device, dtype=torch.float32).reshape(-1, 4, 4).
+                               repeat(self.nbatches, 1, 1))
         self.cur_wrist_pose[:, :3, 3] = self.cur_wrist_pos
         self.cur_wrist_pose[:, :3, :3] = roma.unitquat_to_rotmat(
             roma.quat_wxyz_to_xyzw(self.cur_wrist_rot)) if self.use_quat else (
@@ -215,80 +242,6 @@ class HandOptimizer(torch.nn.Module):
 
         self.ncontacts = 6  # 4
 
-        # Hand finger mask
-        if "leap" in self.hand_model_name or "allegro" in self.hand_model_name:
-            valid_mask = torch.tensor([
-                True, True, True, True, True,  # Thumb
-                True, True,  # [Palm]
-                True, True, True, True, True,  # Index
-                True,  # [Palm]
-                True, True, True, True, True,  # Middle
-                True, True,  # [Palm]
-                True, True, True, True, True,  # Ring
-                False, False,  # [Palm]
-                False, False, False, False, False,  # Little
-                True, False, True, False,  # Index  Side
-                True, False, True, False,  # Middle Side
-                True, False, True, False,  # Ring   Side
-                False, False  # little
-            ])
-        elif ("shadow_hand" in self.hand_model_name or "svh_hand" in self.hand_model_name
-              or "mano_hand" in self.hand_model_name):
-            valid_mask = torch.tensor([
-                True, True, True, True, True,  # Thumb
-                True, True,  # [Palm]
-                True, True, True, True, True,  # Index
-                True,  # [Palm]
-                True, True, True, True, True,  # Middle
-                True, True,  # [Palm]
-                True, True, True, True, True,  # Ring
-                True, True,  # [Palm]
-                True, True, True, True, True,  # Little
-                True, False, True, False,  # Index  Side
-                True, False, True, False,  # Middle Side
-                True, False, True, False,  # Ring   Side
-                True, False  # little
-            ])
-        else:
-            raise NotImplementedError
-
-        self.contact_idx = torch.tensor([
-            0, 1, 2, 3, 4,  # Thumb
-            5, 6,  # [Palm]
-            7, 8, 9, 10, 11,  # Index
-            12,  # [Palm]
-            13, 14, 15, 16, 17,  # Middle
-            18, 19,  # [Palm]
-            20, 21, 22, 23, 24,  # Ring
-            25, 26,  # [Palm]
-            27, 28, 29, 30, 31,  # Little
-            32, 33, 34, 35,  # Index  Side
-            36, 37, 38, 39,  # Middle Side
-            40, 41, 42, 43,  # Ring   Side
-            44, 45,  # little
-        ], dtype=torch.long).to(self.device)[valid_mask]
-
-        # Make weights torch parameters
-        if True:
-            self.contact_weight = torch.tensor([
-                0.5, 1, 1, 0.5, 0.5,  # Thumb
-                1.0, 1.0,  # [Palm]
-                0.5, 0.5, 0.5, 0.5, 0.5,  # Index
-                1.0,  # [Palm]
-                0.5, 0.5, 0.5, 0.5, 0.5,  # Middle
-                1.0, 1.0,  # [Palm]
-                0.5, 0.5, 0.5, 0.5, 0.5,  # Ring
-                1.0, 1.0,  # [Palm]
-                0.5, 0.5, 0.5, 0.5, 0.5,  # Little
-                0.5, 0, 0.5, 0,  # Index  Side
-                0.5, 0, 0.5, 0,  # Middle Side
-                0.5, 0, 0.5, 0,  # Ring   Side
-                0.5, 0,  # little
-            ]).to(self.device)[valid_mask]
-        else:
-            # self.contact_weight = torch.ones(len(self.contact_idx)).to(self.device)
-            pass
-
         self.force_closure_transf_matrix = torch.tensor([
             [0, 0, 0, 0, 0, -1, 0, 1, 0],
             [0, 0, 1, 0, 0, 0, -1, 0, 0],
@@ -300,7 +253,7 @@ class HandOptimizer(torch.nn.Module):
         self.force_closure_weight = 50.0
         self.contact_align_weight = 0.5
 
-    def _initialize_grasp_space(self, hand_layer: LeapHandLayer, out_hand_params: HandParams):
+    def _initialize_grasp_space(self, out_hand_layer: LeapHandLayer, out_hand_params: HandParams):
         """
         Initialize grasp translation, rotation, joint angles, and contact point indices
 
@@ -313,37 +266,47 @@ class HandOptimizer(torch.nn.Module):
         # Initialize wrist grasp pose
         obj_dense_pcl, obj_pt_normals, obj_farthest_pts = self._initialize_object()
         if out_hand_params.wrist_pos is None or out_hand_params.wrist_quat_wxyz is None:
-            grasp_rot, grasp_pos = self._calculate_grasp_pose_from_obj(obj_dense_pcl, obj_pt_normals, obj_farthest_pts)
+            # TODO: collapse [obj_pt_normals, obj_farthest_pts] by sum or mean or sth more proper?
+            grasp_rot, grasp_pos = self._calculate_grasp_pose_from_obj(obj_dense_pcl, obj_pt_normals.sum(dim=0),
+                                                                       obj_farthest_pts.sum(dim=0))
             out_hand_params.wrist_pos = grasp_pos
             out_hand_params.wrist_rot6d = compute_rotation_ortho6d_from_matrix(grasp_rot)
             out_hand_params.wrist_quat_wxyz = roma.quat_xyzw_to_wxyz(roma.rotmat_to_unitquat(grasp_rot))
 
-        # initialize joint angles
+            out_hand_layer.hand_base_pose[:, :3, 3] = grasp_pos
+            out_hand_layer.hand_base_pose[:, :3, :3] = roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(
+                out_hand_params.wrist_quat_wxyz))
+
+            # initialize joint angles
         if out_hand_params.joint_angles is None:
             # joint_angles_mu: hand-crafted canonicalized hand articulation
             # use truncated normal distribution to jitter the joint angles
-            joint_angles_mu = hand_layer.get_init_angle()
-            joint_angles_sigma = self.opt_params.jitter_strength * (hand_layer.joints_upper - hand_layer.joints_lower)
-            joint_angles = torch.zeros([self.nbatches, hand_layer.n_dofs], dtype=torch.float32,
+            joint_angles_mu = out_hand_layer.get_init_angle()
+            joint_angles_sigma = self.opt_params.jitter_strength * (
+                    out_hand_layer.joints_uppers - out_hand_layer.joints_lowers)
+            joint_angles = torch.zeros([self.nbatches, out_hand_layer.n_dofs], dtype=torch.float32,
                                        device=self.device)
-            for i in range(hand_layer.n_dofs):
+            for i in range(out_hand_layer.n_dofs):
                 torch.nn.init.trunc_normal_(joint_angles[:, i], joint_angles_mu[i], joint_angles_sigma[i],
-                                            hand_layer.joints_lower[i] + 1e-6, hand_layer.joints_upper[i] - 1e-6)
+                                            out_hand_layer.joints_lowers[i] + 1e-6,
+                                            out_hand_layer.joints_uppers[i] - 1e-6)
             # joint_angles[:, [1, 5, 9]] = 0
             out_hand_params.joint_angles = joint_angles
+            out_hand_layer.joint_angles = joint_angles.detach().cpu().numpy()
+        out_hand_layer.hand_params = out_hand_params
 
     def _initialize_object(self) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         all_obj_dense_pcl = torch.empty((0, 3), dtype=torch.float32, device=self.device)
         all_obj_pt_normals = torch.empty((0, 3), dtype=torch.float32, device=self.device)
         all_obj_farthest_pts = torch.empty((0, 3), dtype=torch.float32, device=self.device)
-        for obj_mesh in self.object_data.meshes:
+        for _, obj_geom_mesh in self.object_data.geom_meshes.items():
             # Create a layer (with inflating offset as ~0.01) for each object mesh
             # Get inflated convex hull
-            obj_mesh.update_faces(obj_mesh.nondegenerate_faces())
-            obj_mesh.remove_unreferenced_vertices()
+            obj_geom_mesh.update_faces(obj_geom_mesh.nondegenerate_faces())
+            obj_geom_mesh.remove_unreferenced_vertices()
             use_cvx = False
             if use_cvx:
-                obj_mesh_ori = obj_mesh.convex_hull
+                obj_mesh_ori = obj_geom_mesh.convex_hull
                 obj_vertices = obj_mesh_ori.vertices.copy()
                 obj_faces = obj_mesh_ori.faces
                 obj_vertices += 0.2 * obj_vertices / np.linalg.norm(obj_vertices, axis=1, keepdims=True)
@@ -351,7 +314,7 @@ class HandOptimizer(torch.nn.Module):
             else:
                 # Offset the mesh
                 obj_mesh_offset = 0.01
-                obj_mesh_ori = obj_mesh.copy()
+                obj_mesh_ori = obj_geom_mesh.copy()
                 obj_closed_mesh_ori = mrn.meshFromFacesVerts(obj_mesh_ori.faces, obj_mesh_ori.vertices)
 
                 obj_mesh_offset_params = mrmeshpy.OffsetParameters()
@@ -404,7 +367,8 @@ class HandOptimizer(torch.nn.Module):
 
         return all_obj_dense_pcl, all_obj_pt_normals, all_obj_farthest_pts
 
-    def _calculate_grasp_pose_from_obj(self, obj_dense_pcl, obj_pt_normals, obj_farthest_pts):
+    def _calculate_grasp_pose_from_obj(self, obj_dense_pcl, obj_pt_normals, obj_farthest_pts) \
+            -> tuple[torch.Tensor, torch.Tensor]:
         # sample parameters
         distance = (self.opt_params.distance_lower + (self.opt_params.distance_upper - self.opt_params.distance_lower) *
                     torch.rand([self.nbatches],
@@ -516,7 +480,7 @@ class HandOptimizer(torch.nn.Module):
                 torch.sum(self.opt_joint_angles)), f'{self.opt_joint_angles} contains an infinity value'
             return self.joint_means + self.joint_ranges * torch.tanh(self.opt_joint_angles)
 
-    def compute_self_collision(self, verts: torch.Tensor, vert_normals: torch.Tensor):
+    def compute_self_collision(self, verts: torch.Tensor, vert_normals: torch.Tensor) -> torch.Tensor:
         finger_verts, finger_verts_normal, splits = self.sample_fingers_verts_and_normals(verts, vert_normals,
                                                                                           down_sample_rate=2)
         self_collision_loss = None
@@ -535,7 +499,7 @@ class HandOptimizer(torch.nn.Module):
                 self_collision_loss += torch.sum(i2j_signed * i2j_signed_dist_neg, dim=1)
             self_collision_loss += torch.sum(j2i_signed * j2i_signed_dist_neg, dim=1)
 
-        return self_collision_loss
+        return -self_collision_loss
 
     def compute_parallel_contact_loss(self, hand_anchors):
         left_points, right_points = self.parallel_contact_points[:, :3], self.parallel_contact_points[:, 3:]
@@ -555,6 +519,29 @@ class HandOptimizer(torch.nn.Module):
         # loss_close = (thumb_index + index_thumb + middle_thumb) * 500
         loss_close = thumb_index * 500
         return loss_close
+
+    def compute_grasp_loss(self, next_wrist_pose: torch.Tensor,
+                           hand_vertices: torch.Tensor, hand_normals: torch.Tensor):
+        object_center = self.object_data.all_points.mean(dim=0)
+
+        if True:
+            total_grasp_loss = p3d_stable_angle_between_vectors(
+                (self.hand_anchors + self.hand_anchors_normals).mean(dim=0),
+                (object_center - self.hand_anchors).mean(dim=0)).mean()
+        else:
+            next_grasp_site_pos = p3d_transform_points(self.grasp_site_local_pos, next_wrist_pose)
+            self.hand_visual_grasp_site_pos = next_grasp_site_pos.squeeze(dim=0).detach().cpu().numpy()
+
+            next_grasp_direction_site_pos = p3d_transform_points(self.grasp_direction_site_local_pos, next_wrist_pose)
+            self.hand_visual_grasp_direction_site_pos = (next_grasp_direction_site_pos.squeeze(dim=0)
+                                                         .detach().cpu().numpy())
+
+            hand_grasp_direction = next_grasp_direction_site_pos - next_grasp_site_pos
+            hand_object_direction = object_center - next_grasp_site_pos
+            total_grasp_loss = stable_angle(hand_grasp_direction, hand_object_direction, dim=-1)
+
+        # print(total_grasp_loss)
+        return total_grasp_loss
 
     def update_opt_wrist_pose(self, wrist_pos: torch.Tensor, wrist_rot: torch.Tensor):
         with torch.no_grad():
@@ -609,24 +596,25 @@ class HandOptimizer(torch.nn.Module):
 
         self.hand_visual_verts = o3d_vox_downsample(pred_vertices.squeeze().detach().cpu().numpy())
         self.hand_visual_vert_normals = o3d_vox_downsample(pred_normals.squeeze().detach().cpu().numpy())
-        next_grasp_site_pos = torch.matmul(next_wrist_pose,
-                                           self.grasp_site_local_pos.transpose(0, 1)).transpose(1, 2)[..., :3]
-        self.hand_visual_grasp_site_pos = next_grasp_site_pos.squeeze(dim=0).detach().cpu().numpy()
 
         # 2.1- Hand anchors of [pred_vertices/pred_normals] of hand at [next_wrist_pose]
         self.hand_anchors = self.hand_anchor_layer(pred_vertices)
         self.hand_anchors_normals = self.hand_anchor_layer(pred_normals)
+        self.contact_weight = torch.ones(self.hand_anchors.shape[1], device=self.device)
+
+        # 2.2- Hand grasp loss
+        hand_grasp_loss = self.compute_grasp_loss(next_wrist_pose, pred_vertices, pred_normals)
 
         # 3- Losses at [next_wrist_pose]
         # 3.1- Collision with Env Obstacles (Floor, etc.)
-        loss_collision_obstacle = 0
+        hand_obstacle_collision_loss = 0
         if obstacle is not None:
             _, h2o_signed, _, _, _, _ = point2point_signed(
                 pred_vertices, obstacle.all_points.repeat(self.nbatches, 1, 1), pred_normals,
                 obstacle.all_normals.repeat(self.nbatches, 1, 1))
 
             h2o_dist_neg = torch.logical_and(h2o_signed.abs() < 0.05, h2o_signed < 0.0)
-            loss_collision_obstacle = torch.sum(h2o_signed * h2o_dist_neg, dim=1) * -20
+            hand_obstacle_collision_loss = -20 * torch.sum(h2o_signed * h2o_dist_neg, dim=1)
         # torch.cuda.synchronize()
         # time_start = time.time()
 
@@ -641,11 +629,11 @@ class HandOptimizer(torch.nn.Module):
         o2h_dist_neg = torch.logical_and(o2h_signed.abs() < 0.005, o2h_signed < 0.0)
         h2o_dist_neg = torch.logical_and(h2o_signed.abs() < 0.005, h2o_signed < 0.0)
 
-        loss_collision_h2o = torch.sum(h2o_signed * h2o_dist_neg, dim=1)
-        loss_collision_o2h = torch.sum(o2h_signed * o2h_dist_neg, dim=1)
+        loss_collision_h2o = -torch.sum(h2o_signed * h2o_dist_neg, dim=1)
+        loss_collision_o2h = -torch.sum(o2h_signed * o2h_dist_neg, dim=1)
 
-        hand_obj_collision = -20 * (1 * loss_collision_h2o + 10 * loss_collision_o2h)  # 75
-        # hand_obj_collision = -200 * loss_collision_o2h  # 75
+        hand_obj_collision_loss = 75 * (1 * loss_collision_h2o + 10 * loss_collision_o2h)  # 75
+        # hand_obj_collision_loss = 200 * loss_collision_o2h  # 75
         # torch.cuda.synchronize()
         # time_cost = time.time() - time_start
         # print('time cost', time_cost)
@@ -653,9 +641,9 @@ class HandOptimizer(torch.nn.Module):
         # 3.3- Self-Collision
         if self.hand_model_name == 'parallel_gripper':
             # No self collision with parallel jaw gripper
-            hand_self_collision = 0
+            hand_self_collision_loss = 0
         else:
-            hand_self_collision = -60 * self.compute_self_collision(pred_vertices, pred_normals)  # 60 as default
+            hand_self_collision_loss = 60 * self.compute_self_collision(pred_vertices, pred_normals)  # 60 as default
 
         # if iteration > 75:
         #     loss_close = self.compute_close_distance(hand_anchors, h2o_signed)
@@ -663,12 +651,12 @@ class HandOptimizer(torch.nn.Module):
         #     loss_close = 0
 
         # 3.4- Anchors' contact-with-object loss
-        hand_near_idx = hand_near_idx[:, self.hand_anchor_layer.vert_idx][:, self.contact_idx]
+        hand_near_idx = hand_near_idx[:, self.hand_anchor_layer.vert_idx]
         contact_hand_vec = torch.nn.functional.normalize(
-            object_points[hand_near_idx] - self.hand_anchors[:, self.contact_idx], dim=-1)
+            object_points[hand_near_idx] - self.hand_anchors, dim=-1)
         contact_obj_vec = -object_normals[hand_near_idx]
 
-        contact_anchors_normals = self.hand_anchors_normals[:, self.contact_idx].view(-1, 1, 3)
+        contact_anchors_normals = self.hand_anchors_normals.view(-1, 1, 3)
         out_1 = torch.bmm(contact_anchors_normals, contact_hand_vec.view(-1, 3, 1)).view(self.nbatches, -1)
         out_2 = torch.bmm(contact_anchors_normals, contact_obj_vec.view(-1, 3, 1)).view(self.nbatches, -1)
 
@@ -676,21 +664,22 @@ class HandOptimizer(torch.nn.Module):
         contact_align_loss += (1 - out_2).sum(-1) * 0.5 * self.contact_align_weight
 
         # 3.4.1- Anchors' contact distance loss
-        # mask = (h2o_vec[:, self.hand_anchor_layer.vert_idx][:, self.contact_idx] * self.hand_anchors_normal[:, self.contact_idx]).sum(dim=-1) < 0
+        # mask = (h2o_vec[:, self.hand_anchor_layer.vert_idx] * self.hand_anchors_normal).sum(dim=-1) < 0
         E_dis = torch.sum(
-            torch.abs(h2o_signed[:, self.hand_anchor_layer.vert_idx][:, self.contact_idx]) *
+            torch.abs(h2o_signed[:, self.hand_anchor_layer.vert_idx]) *
             self.contact_weight, dim=1) * self.distance_weight  # * self.config.contact_prob[i]
 
         # 3.4.2- E_fc: force closure loss
         if self.apply_force_closure:
-            weights = torch.ones(len(self.contact_idx)).expand(self.nbatches, -1)
-            select_contact_idx = torch.multinomial(weights, num_samples=self.ncontacts,
+            contact_ids = torch.arange(self.hand_anchors.shape[1], device=self.device)
+            contact_weights = self.contact_weight.expand(self.nbatches, -1)
+            select_contact_idx = torch.multinomial(contact_weights, num_samples=self.ncontacts,
                                                    replacement=False).to(self.device)
             # select_contact_idx = torch.tensor([[2, 3, 4, 9, 10, 11]], dtype=torch.long).repeat(self.bs, 1).to(self.device)
 
-            random_contact_idx = self.contact_idx[select_contact_idx]
+            random_contact_ids = contact_ids[select_contact_idx]
 
-            j = random_contact_idx.reshape(self.nbatches, self.ncontacts, 1)
+            j = random_contact_ids.reshape(self.nbatches, self.ncontacts, 1)
             selected_anchors = self.hand_anchors[
                 torch.arange(self.nbatches).reshape(self.nbatches, 1, 1), j, torch.arange(3)]
 
@@ -722,8 +711,8 @@ class HandOptimizer(torch.nn.Module):
         else:
             parallel_contact_loss = 0.0
 
-        total_cost = (hand_obj_collision + hand_self_collision + E_dis + E_fc + contact_align_loss + hand_rot_loss
-                      + loss_collision_obstacle + angle_loss + parallel_contact_loss)
+        total_cost = (hand_obj_collision_loss + hand_self_collision_loss + hand_rot_loss + hand_grasp_loss +
+                      E_dis + E_fc + contact_align_loss + hand_obstacle_collision_loss + angle_loss + parallel_contact_loss)
 
         return total_cost
 
@@ -765,7 +754,7 @@ class HandOptimizer(torch.nn.Module):
                          wrist_pos=wrist_pos.squeeze().cpu().numpy(),
                          joint_angles=self.best_joint_angles.squeeze().cpu().numpy(),
                          obj_scale=self.object_data.scale,
-                         obj_mesh_paths=self.object_data.mesh_paths)
+                         obj_mesh_paths=self.object_data.geom_mesh_paths)
 
     def last_grasp_configuration(self, save_real=False) -> HandGrasp:
         # get current hand parameters
@@ -789,7 +778,7 @@ class HandOptimizer(torch.nn.Module):
                          wrist_pos=wrist_pos.squeeze().cpu().numpy(),
                          joint_angles=self.decode_joint_angles(with_limit=False).detach().squeeze().cpu().numpy(),
                          obj_scale=self.object_data.scale,
-                         obj_mesh_paths=self.object_data.mesh_paths)
+                         obj_mesh_paths=self.object_data.geom_mesh_paths)
 
     def optimize(self, cur_wrist_pos: Optional[torch.Tensor] = None, cur_wrist_rot: Optional[torch.Tensor] = None,
                  obstacle: ObjectData = None, n_iters=1000):
@@ -839,8 +828,8 @@ class HandOptimizer(torch.nn.Module):
 
     def step_optimize(self, cur_wrist_pos: Optional[Union[np.ndarray, torch.Tensor]] = None,
                       cur_wrist_rot: Optional[Union[np.ndarray, torch.Tensor]] = None,
-                      cur_obj_mesh_poses: Optional[list[Union[np.ndarray, torch.Tensor]]] = None,
-                      cur_obst_mesh_poses: Optional[list[Union[np.ndarray, torch.Tensor]]] = None,
+                      cur_obj_geom_poses: Optional[dict[str, Union[np.ndarray, torch.Tensor]]] = None,
+                      cur_obst_geom_poses: Optional[list[Union[np.ndarray, torch.Tensor]]] = None,
                       substeps_num: int = 1) -> HandGrasp:
         # Transform wrist
         with torch.no_grad():
@@ -855,11 +844,11 @@ class HandOptimizer(torch.nn.Module):
                                                  device=self.device)
 
         # Transform objects & obstacles
-        if cur_obj_mesh_poses:
-            self.object_data.transform_to(cur_obj_mesh_poses)
+        if cur_obj_geom_poses:
+            self.object_data.transform_to(cur_obj_geom_poses)
 
-        if cur_obst_mesh_poses and self.obstacle_data:
-            self.obstacle_data.transform_to(cur_obst_mesh_poses)
+        if cur_obst_geom_poses and self.obstacle_data:
+            self.obstacle_data.transform_to(cur_obst_geom_poses)
 
         # Next optimal grasp
         self.optimize(cur_wrist_pos, cur_wrist_rot,

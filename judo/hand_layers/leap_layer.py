@@ -1,5 +1,5 @@
 # leap_hand layer for torch
-from typing import Union
+from typing import Optional, Union, TYPE_CHECKING
 import torch
 import trimesh
 import os
@@ -15,11 +15,15 @@ from scipy.spatial import KDTree
 import point_cloud_utils as pcu
 import pytorch_kinematics as pk
 import pytorch_kinematics.transforms as tf
+from mjmanip.pytorch3d_utils import p3d_transform_points
 
 import mujoco as mj
 import roma
 
 from .layer_asset_utils import LEAP_LAYER_CACHE_DIR
+
+if TYPE_CHECKING:
+    from ..optimizers.hand_optimizers.hand_optimizer import HandParams
 
 # mjmanip
 from mjmanip.utils import mj_get_mesh_file_path
@@ -40,24 +44,41 @@ else:
 
 
 class LeapHandLayer(torch.nn.Module):
+
+    def float_torch_tensor(self, x: np.ndarray) -> torch.Tensor:
+        return torch.from_numpy(x).to(device=self.device, dtype=torch.float32).repeat(self.nbatches, 1)
+
     def __init__(self, hand_model_desc: str,
-                 hand_base_pose: np.ndarray,
-                 joint_angles: np.ndarray,
+                 hand_base_pose: Optional[np.ndarray] = None,
+                 joint_angles: Optional[np.ndarray] = None,
                  batch_size: int = 1,
                  to_mano_frame: bool = False, show_mesh: bool = False,
                  use_collision_mesh: bool = False, regen_cache: bool = False,
                  visualized: bool = False, device: str = 'cuda'):
         super().__init__()
+        self.device = device
+        self.nbatches = batch_size
+        self.hand_params: Optional[HandParams] = None
         self.hand_model_desc = hand_model_desc
-        self.hand_base_pose = hand_base_pose
+        self.mj_init_hand_base_pose = np.tile(np.array([0, 0, 0, 1, 0, 0, 0]), (batch_size, 1))
+        torch_hand_base_pose = torch.eye(4).reshape(-1, 4, 4).float()
+        if hand_base_pose is not None:
+            assert hand_base_pose.shape[0] == batch_size
+            self.mj_init_hand_base_pose = hand_base_pose
+            torch_hand_base_pose[:, :3, 3] = torch.from_numpy(hand_base_pose[:, 3]).float().to(device)
+            torch_hand_base_pose[:, :3, :3] = roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(
+                torch.from_numpy(hand_base_pose[:, 3:]).float().to(device)))
+        self.hand_base_pose = torch_hand_base_pose
+
         self.show_mesh = show_mesh
         self.make_contact_points = True
         self.use_collision_mesh = use_collision_mesh
         self.to_mano_frame = to_mano_frame
         self.visualized = visualized
-        self.device = device
         self.finger_num = 4
-        self.joint_angles = joint_angles
+        self.mj_init_joint_anges = joint_angles if joint_angles is not None \
+            else np.tile(np.zeros(LEAP.HAND_DOFS_NO), (batch_size, 1))
+        self.joint_angles = torch.from_numpy(joint_angles).float().to(device) if joint_angles is not None else None
         self.batch_size = batch_size
 
         self.regen_cache = regen_cache
@@ -119,9 +140,6 @@ class LeapHandLayer(torch.nn.Module):
 
         self.register_buffer('base_2_world', self.to_mano_transform)
 
-        # Kinematics
-        self.init_kinematics()
-
     def init_kinematics(self):
         self.is_from_urdf = self.hand_model_desc.endswith('urdf')
         if self.is_from_urdf:
@@ -134,13 +152,7 @@ class LeapHandLayer(torch.nn.Module):
             self.mj_hand_base = self.mj_model.body(LEAP.HAND_BASE_NAME)
             self.hand_body_names = [self.mj_model.body(i).name for i in range(self.mj_model.nbody)]
             self.hand_body_names.remove('world')
-        torch_hand_base_pose = torch.eye(4).reshape(-1, 4, 4).float()
-        torch_hand_base_pose[:, :3, 3] = torch.from_numpy(self.hand_base_pose[:3]).to(self.device).float()
-        torch_hand_base_pose[:, :3, :3] = roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(
-            torch.from_numpy(self.hand_base_pose[3:]).to(self.device).float()))
-        self.hand_base_pose = torch_hand_base_pose
 
-        self.joint_angles = torch.from_numpy(self.joint_angles).to(self.device).float()
         self.joint_lowers = self.chain.low
         self.joint_uppers = self.chain.high
         self.joint_means = (self.joint_lowers + self.joint_uppers) / 2
@@ -155,7 +167,7 @@ class LeapHandLayer(torch.nn.Module):
             self.regen_cache = True
         else:
             self.make_contact_points = False
-            self.meshes = self.load_meshes()
+            self.meshes_data = self.load_meshes()
 
         self.hand_segment_indices, self.hand_finger_indices = self.get_hand_segment_indices()
 
@@ -178,7 +190,7 @@ class LeapHandLayer(torch.nn.Module):
         self.show_mesh = True  # mesh with face
         self.make_contact_points = True  # True: creating convex meshes
 
-        self.meshes = self.load_meshes()
+        self.meshes_data = self.load_meshes()
         self.save_geom_convex_meshes(self.geom_convex_meshes)
 
         hand_meshes = self.get_forward_hand_mesh(pose, hand_qpos)[0]
@@ -190,13 +202,13 @@ class LeapHandLayer(torch.nn.Module):
 
         self.show_mesh = True
         self.make_contact_points = False
-        self.meshes = self.load_meshes()
+        self.meshes_data = self.load_meshes()
         hand_all_zero_mesh = self.get_forward_hand_mesh(pose, hand_qpos)[0]
         hand_all_zero_mesh.export(f'{LEAP_LAYER_CACHE_DIR}/hand_all_zero.obj')
 
         self.show_mesh = False
         self.make_contact_points = True
-        self.meshes = self.load_meshes()
+        self.meshes_data = self.load_meshes()
         self.save_surface_points(self.hand_surface_points)
 
         self.get_forward_vertices(pose, hand_qpos)  # Sample [hand_composite_points]
@@ -204,15 +216,15 @@ class LeapHandLayer(torch.nn.Module):
                                                                 down_sampling=False)
         self.show_mesh = True
         self.make_contact_points = False
-        self.meshes = self.load_meshes()
+        self.meshes_data = self.load_meshes()
         hand_to_mano_mesh = self.get_forward_hand_mesh(pose, hand_qpos)[0]
         hand_to_mano_mesh.export(f'{LEAP_LAYER_CACHE_DIR}/hand_to_mano_frame.obj')
 
         self.make_contact_points = False
         self.show_mesh = show_mesh
 
-    def load_meshes(self):
-        meshes = {}
+    def load_meshes(self) -> dict[str, tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        meshes_data = {}
         for link_key, _ in self.link_geom_names.items():
             link = self.chain.find_link(link_key)
             if not link:
@@ -237,14 +249,12 @@ class LeapHandLayer(torch.nn.Module):
                     if use_convex_hull:
                         geom_mesh = geom_mesh.convex_hull
                     else:
-                        # 'coacd'
-                        mesh = coacd.Mesh(geom_mesh.vertices, geom_mesh.faces)
-                        parts = coacd.run_coacd(mesh, threshold=threshold, apx_mode='ch')
-                        meshes = []
+                        coacd_mesh = coacd.Mesh(geom_mesh.vertices, geom_mesh.faces)
+                        parts = coacd.run_coacd(coacd_mesh, threshold=threshold, apx_mode='ch')
+                        coacd_meshes = []
                         for part in parts:
-                            mesh = trimesh.Trimesh(vertices=part[0], faces=part[1])
-                            meshes.append(mesh)
-                        geom_mesh = trimesh.boolean.boolean_manifold(meshes, 'union')
+                            coacd_meshes.append(trimesh.Trimesh(vertices=part[0], faces=part[1]))
+                        geom_mesh = trimesh.boolean.boolean_manifold(coacd_meshes, 'union')
                     self.geom_convex_meshes[geom_name] = geom_mesh
 
                 geom_pre_transform = pk_geom.offset
@@ -257,7 +267,7 @@ class LeapHandLayer(torch.nn.Module):
                     geom_vertex_normals = geom_pre_transform.transform_normals(geom_vertex_normals)
 
                     temp = torch.ones(geom_mesh.vertices.shape[0], 1).float()
-                    meshes[geom_name] = [
+                    meshes_data[geom_name] = [
                         torch.cat((geom_verts, temp), dim=-1).to(self.device),
                         geom_mesh.faces,
                         torch.cat((geom_vertex_normals, temp), dim=-1).float().to(self.device)
@@ -277,21 +287,21 @@ class LeapHandLayer(torch.nn.Module):
                     geom_vertex_normals = torch.from_numpy(points_info[idxs, 3:6]).float().to(self.device)
                     geom_vertex_normals = geom_pre_transform.transform_normals(geom_vertex_normals)
                     temp = torch.ones(idxs.shape[0], 1).float()
-                    meshes[geom_name] = [
+                    meshes_data[geom_name] = [
                         torch.cat((geom_verts, temp), dim=-1).to(self.device),
                         torch.zeros([0]),  # no real meaning, just for placeholder
                         torch.cat((geom_vertex_normals, temp), dim=-1).float().to(self.device)
                     ]
-        return meshes
+        return meshes_data
 
     def get_hand_segment_indices(self) -> tuple[dict[str, torch.Tensor], dict[str, torch.Tensor]]:
         hand_segment_indices = {}
         hand_finger_indices = {}
         segment_start = 0  # torch.tensor(0, dtype=torch.long, device=self.device)
         finger_start = 0  # torch.tensor(0, dtype=torch.long, device=self.device)
-        for geom_name, geom_mesh in self.geom_convex_meshes.items():
+        for geom_name, geom_mesh_meta in self.meshes_data.items():
             geom_name = Path(geom_name).stem
-            end = segment_start + geom_mesh.vertices.shape[0]
+            end = segment_start + geom_mesh_meta[0].shape[0]
             hand_segment_indices[geom_name] = torch.arange(segment_start, end)  # [segment_start, end]
             if geom_name in self.ordered_finger_endeffort:
                 hand_finger_indices[geom_name] = torch.arange(finger_start, end)  # [finger_start, end]
@@ -328,11 +338,11 @@ class LeapHandLayer(torch.nn.Module):
         for link_key, geom_name_list in self.link_geom_names.items():
             geom_name_list = [geom_name_list] if isinstance(geom_name_list, str) else geom_name_list
             for geom_name in geom_name_list:
-                mesh_data = self.meshes[geom_name]
+                mesh_data = self.meshes_data[geom_name]
                 rotmat = torch.matmul(hand_base_pose,
                                       torch.matmul(self.to_mano_transform, frame_tfs[link_key].get_matrix()))
                 vertices = mesh_data[0]
-                batch_vertices = torch.matmul(rotmat, vertices.transpose(0, 1)).transpose(1, 2)[..., :3]
+                batch_vertices = p3d_transform_points(vertices, rotmat)
                 face = mesh_data[1]
                 sub_meshes = [trimesh.Trimesh(vertices.cpu().numpy(), face) for vertices in batch_vertices]
                 meshes.append(sub_meshes)
@@ -357,11 +367,11 @@ class LeapHandLayer(torch.nn.Module):
         verts = []
         verts_normal = []
 
-        # for mesh_key, mesh in self.meshes.items():
+        # for mesh_key, mesh in self.meshes_meta.items():
         for link_key, geom_names in self.link_geom_names.items():
             geom_name_list = [geom_names] if isinstance(geom_names, str) else geom_names
             for geom_name in geom_name_list:
-                mesh_data = self.meshes.get(geom_name, None)
+                mesh_data = self.meshes_data.get(geom_name, None)
                 if mesh_data is None:
                     print(f"mesh {geom_name} not found")
                     continue
@@ -373,15 +383,14 @@ class LeapHandLayer(torch.nn.Module):
 
                 # hand_base_pose * link_pose * link_geom_verts/normals
                 vertices = mesh_data[0]
-                batch_vertices = torch.matmul(link_pose, vertices.transpose(0, 1)).transpose(1, 2)[..., :3]
+                batch_vertices = p3d_transform_points(vertices, link_pose)
                 verts.append(batch_vertices)
                 if self.make_contact_points:
                     self.hand_composite_points[geom_name] = batch_vertices.squeeze().detach().cpu().numpy()
 
                 vertex_normals = mesh_data[2]
                 link_pose[:, :3, 3] *= 0
-                batch_vertex_normals = (
-                    torch.matmul(link_pose, vertex_normals.transpose(0, 1)).transpose(1, 2)[..., :3])
+                batch_vertex_normals = p3d_transform_points(vertex_normals, link_pose)
                 verts_normal.append(batch_vertex_normals)
 
         verts = torch.cat(verts, dim=1).contiguous()
@@ -400,7 +409,7 @@ class LeapHandLayer(torch.nn.Module):
 
     @classmethod
     def sample_visible_points(cls, hand_whole_mesh: trimesh.Trimesh,
-                              hand_composite_points: dict[str, np.ndarray] = None,
+                              hand_composite_points: dict[str, np.ndarray],
                               voxel_size=0.0055, dist_threshold: float = 0.0005,
                               down_sampling: bool = False) -> dict[str, np.ndarray]:
         count = 0
@@ -408,20 +417,20 @@ class LeapHandLayer(torch.nn.Module):
         os.makedirs(dst_dir, exist_ok=True)
 
         # hand = trimesh.load(f'{LEAP_LAYER_CACHE_DIR}/hand.obj', force='mesh')
-        result = get_surface_point_cloud(hand_whole_mesh, scan_count=100, scan_resolution=200)
-        points = np.array(result.points)
+        hand_surface_pcl = get_surface_point_cloud(hand_whole_mesh, scan_count=100, scan_resolution=200)
+        hand_surface_points = hand_surface_pcl.points.view(np.ndarray)
         if down_sampling:
-            points = pcu.downsample_point_cloud_on_voxel_grid(voxel_size / 2, points)
-            points = pcu.downsample_point_cloud_on_voxel_grid(voxel_size / 2, points)
+            hand_surface_points = pcu.downsample_point_cloud_on_voxel_grid(voxel_size / 2, hand_surface_points)
+            hand_surface_points = pcu.downsample_point_cloud_on_voxel_grid(voxel_size / 2, hand_surface_points)
 
+        point_tree = KDTree(data=hand_surface_points)
         visible_point_indices = {}
-        for geom_name, points_info in hand_composite_points.items():
-            point_tree = KDTree(data=points)
-            dist, index = point_tree.query(points_info[:, :3], k=1)
+        for geom_name, geom_points in hand_composite_points.items():
+            dist, index = point_tree.query(geom_points[:, :3], k=1)
             mask = dist < dist_threshold
             index = index[mask]
 
-            visible_points = points_info[mask]
+            visible_points = geom_points[mask]
             v_sampled = visible_points[:, :3]
             if down_sampling:
                 v_sampled = pcu.downsample_point_cloud_on_voxel_grid(voxel_size, v_sampled)
@@ -435,22 +444,22 @@ class LeapHandLayer(torch.nn.Module):
             # pc = trimesh.PointCloud(v_sampled, colors=(255, 255, 0))
             # pc.show()
 
-            _, v_sampled_idx = KDTree(points_info[:, :3]).query(v_sampled, k=1)
+            _, v_sampled_idx = KDTree(geom_points[:, :3]).query(v_sampled, k=1)
             # pc = trimesh.PointCloud(point_info[:, :3][v_sampled_idx])
             # pc.show()
-            points[index] = np.array([-1e6, -1e6, 1e6])
+            hand_surface_points[index] = np.array([-1e6, -1e6, 1e6])
             np.save(f'{dst_dir}/{geom_name}.npy', v_sampled_idx)
             visible_point_indices[geom_name] = v_sampled_idx
         print("sampling visible points done:", count, dst_dir)
         return visible_point_indices
 
     @classmethod
-    def sample_geom_surface_points(cls, geom_mesh: trimesh.Trimesh, n_points: int = 50000) \
+    def sample_geom_surface_points(cls, geom_mesh: trimesh.Trimesh, npoints: int = 50000) \
             -> tuple[np.ndarray, np.ndarray]:
         np.random.seed(0)
-        points, idx = trimesh.sample.sample_surface_even(geom_mesh, n_points, radius=None)
+        points, idx = trimesh.sample.sample_surface_even(geom_mesh, npoints, radius=None)
         point_normals = geom_mesh.face_normals[idx]
-        return points, point_normals
+        return points.view(np.ndarray), point_normals
 
     @classmethod
     def save_surface_points(cls, surface_points: dict[str, np.ndarray],
@@ -471,23 +480,23 @@ class LeapHandLayer(torch.nn.Module):
 
 
 class LeapAnchor(torch.nn.Module):
-    def __init__(self, picking_points: bool = False):
+    # Default anchor points
+    DEFAULT_VERT_IDXES = np.array(
+        [647, 647, 690, 690, 461, 461, 377, 377, 386, 386, 184, 184, 146, 146, 1152, 1152, 1151, 1023, 1023, 888, 888,
+         828, 828, 839, 839, 179, 179, 1561, 1625, 1625, 1529, 1529, 1350, 1424, 1424, 1304, 1304, 1331, 164, 164, 205,
+         205, 186, 186, 2074, 2017, 2017, 2065, 2065, 1953, 1953, 1993, 1993, 1782, 1782, 1697, 1697])
+
+    def __init__(self):
         super().__init__()
-        self.picking_points = picking_points
-        # Default anchor points
-        vert_idx = np.array(
-            [5054, 5054, 5444, 5444, 5081, 5081, 4680, 4680, 4913, 4913, 4748, 4748, 4564, 4564, 4483, 4483, 4416,
-             4416, 3586, 3421, 3612, 3351, 3527, 3441, 3017, 2990, 2908, 2369, 2121, 2390, 2310, 2273, 2215, 1593,
-             1671, 1622, 6751, 6838, 6641, 6689, 6521, 6832, 6036, 6190, 6365])
-        # vert_idx = np.load(os.path.join(self.BASE_DIR, 'anchor_idx.npy'))
-        self.register_buffer("vert_idx", torch.from_numpy(vert_idx).long())
+        self.picking_points = not len(self.DEFAULT_VERT_IDXES)
+        self.register_buffer("vert_idx", torch.from_numpy(self.DEFAULT_VERT_IDXES).long())
 
     def forward(self, vertices: torch.Tensor):
         """
         vertices: TENSOR[N_BATCH, 4040, 3]
         """
         if self.picking_points:
-            vert_idx = self.pick_points(vertices.squeeze().cpu().numpy())
+            vert_idx = self.pick_points(vertices.squeeze().detach().cpu().numpy())
             self.register_buffer("vert_idx", torch.from_numpy(vert_idx).long())
             self.picking_points = False
 
@@ -510,7 +519,7 @@ class LeapAnchor(torch.nn.Module):
         vis.run()  # user picks points
         vis.destroy_window()
         print(vis.get_picked_points())
-        return vis.get_picked_points()
+        return np.array(vis.get_picked_points())
 
 
 if __name__ == "__main__":
