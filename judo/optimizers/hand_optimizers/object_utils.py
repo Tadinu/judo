@@ -23,6 +23,8 @@ class ObjectData:
     geom_normals: dict[str, torch.Tensor]
     geom_meshes: dict[str, trimesh.Trimesh]
     geom_tfs: dict[str, np.ndarray]  # mat 4x4
+    all_geom_points: Optional[torch.Tensor] = None
+    all_geom_normals: Optional[torch.Tensor] = None
     geom_mesh_paths: Optional[dict[str, str]] = None
     scale: float = 1.0
     npoints_each_geom: int = 1000
@@ -84,9 +86,10 @@ class ObjectData:
         geom_meshes: dict[str, trimesh.Trimesh] = {}
         geom_mesh_paths: dict[str, str] = {}
         geom_tfs: dict[str, np.ndarray] = {}
-        for geom_name, m in mj_get_body_trimeshes(mj_model, data=mj_data, model_spec=mj_spec, meshdir=meshdir,
+        # NOTE: GET OBJ GEOM MESHES WITH LOCAL POSE!
+        for geom_name, m in mj_get_body_trimeshes(mj_model, data=mj_data, meshdir=meshdir,
                                                   body_names=body_names, geom_names=geom_names,
-                                                  use_global_pose=True, is_collision=is_collision).items():
+                                                  use_global_pose=False, is_collision=is_collision).items():
             geom_meshes[geom_name] = m[0]
             geom_mesh_paths[geom_name] = m[1]
             geom_tfs[geom_name] = m[2]
@@ -143,13 +146,27 @@ class ObjectData:
                           geom_tfs=geom_tfs,
                           scale=scale)
 
-    @property
-    def all_points(self) -> torch.Tensor:
-        return torch.cat(list(self.geom_points.values()))
+    def _all_pts(self, mj_data: mj.MjData, pts: dict[str, torch.Tensor],
+                 orientation_only: bool = False) -> torch.Tensor:
+        all_pts = []
+        for geom_name, geom_pt in pts.items():
+            geom_data = mj_data.geom(geom_name)
+            device = geom_pt.device
+            geom_pos = np.zeros(3, dtype=np.float32) if orientation_only else np.array(geom_data.xpos)
+            geom_quat = np.zeros(4)
+            mj.mju_mat2Quat(geom_quat, geom_data.xmat)
+            geom_pose = np.concat([geom_pos, geom_quat])
+            all_pts.append(
+                p3d_transform_points(geom_pt, torch.from_numpy(mj_pose_to_mat(geom_pose)).float().to(device)))
+        return torch.cat(all_pts).float()
 
     @property
-    def all_normals(self) -> torch.Tensor:
-        return torch.cat(list(self.geom_normals.values()))
+    def all_points(self) -> Optional[torch.Tensor]:
+        return self.all_geom_points
+
+    @property
+    def all_normals(self) -> Optional[torch.Tensor]:
+        return self.all_geom_normals
 
     def transform_to(self, new_geom_poses: dict[str, np.ndarray], resample: bool = False):
         assert new_geom_poses.keys() == self.geom_meshes.keys()
@@ -185,9 +202,13 @@ class ObjectData:
                 self.geom_normals[geom_name] = torch.nn.functional.normalize(self.geom_normals[geom_name] @ R.T, dim=-1)
         self.geom_tfs = new_geom_tfs
 
-    def visualize(self):
+    def step(self, mj_data: mj.MjData):
+        self.all_geom_points = self._all_pts(mj_data, self.geom_points)
+        self.all_geom_normals = self._all_pts(mj_data, self.geom_normals, orientation_only=True)
+
+    def visualize(self, mj_data: mj.MjData):
         trimesh.Scene(self.geom_meshes).show()
-        trimesh.Scene(trimesh.PointCloud(self.all_points.cpu().numpy())).show()
+        trimesh.Scene(trimesh.PointCloud(self.all_points(mj_data).cpu().numpy())).show()
 
 
 def get_stable_pose(mesh):

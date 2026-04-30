@@ -20,6 +20,7 @@ from meshlib import mrmeshpy
 from meshlib import mrmeshnumpy as mrn
 from tqdm import tqdm
 
+import mujoco as mj
 # judo
 from judo.optimizers.hand_optimizers.object_utils import ObjectData
 from judo.optimizers.hand_optimizers.loss_utils import point2point_signed
@@ -113,7 +114,7 @@ class HandOptimizer(torch.nn.Module):
 
     def __init__(self, hand_params: HandParams,
                  object_data: Optional[ObjectData] = None,
-                 obstacle_data: Optional[ObjectData] = None,
+                 obstacles_data: Optional[list[ObjectData]] = None,
                  to_mano_frame: bool = False,
                  opt_params: Optional[HandOptimizerParams] = None,
                  apply_force_closure: bool = True,
@@ -128,7 +129,7 @@ class HandOptimizer(torch.nn.Module):
         # Object/Obstacle data
         assert object_data
         self.object_data = object_data
-        self.obstacle_data = obstacle_data
+        self.obstacles_data = obstacles_data
 
         # Hand data
         self.use_quat = True  # rot6d yields a bit better grasp pose result than quat
@@ -549,7 +550,7 @@ class HandOptimizer(torch.nn.Module):
             self.opt_wrist_rot.copy_(wrist_rot if self.use_quat else
                                      roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(wrist_rot)))
 
-    def forward(self, obstacle: ObjectData):
+    def forward(self, obstacles: list[ObjectData]):
         """
         Implement loss function
         """
@@ -608,10 +609,10 @@ class HandOptimizer(torch.nn.Module):
         # 3- Losses at [next_wrist_pose]
         # 3.1- Collision with Env Obstacles (Floor, etc.)
         hand_obstacle_collision_loss = 0
-        if obstacle is not None:
+        for obst in obstacles:
             _, h2o_signed, _, _, _, _ = point2point_signed(
-                pred_vertices, obstacle.all_points.repeat(self.nbatches, 1, 1), pred_normals,
-                obstacle.all_normals.repeat(self.nbatches, 1, 1))
+                pred_vertices, obst.all_points.repeat(self.nbatches, 1, 1), pred_normals,
+                obst.all_normals.repeat(self.nbatches, 1, 1))
 
             h2o_dist_neg = torch.logical_and(h2o_signed.abs() < 0.05, h2o_signed < 0.0)
             hand_obstacle_collision_loss = -20 * torch.sum(h2o_signed * h2o_dist_neg, dim=1)
@@ -781,7 +782,7 @@ class HandOptimizer(torch.nn.Module):
                          obj_mesh_paths=self.object_data.geom_mesh_paths)
 
     def optimize(self, cur_wrist_pos: Optional[torch.Tensor] = None, cur_wrist_rot: Optional[torch.Tensor] = None,
-                 obstacle: ObjectData = None, n_iters=1000):
+                 obstacles: Optional[list[ObjectData]] = None, n_iters=1000):
         min_loss = 1e8
 
         # Update [self.cur_wrist_pose]
@@ -798,7 +799,7 @@ class HandOptimizer(torch.nn.Module):
         iter_range = tqdm(range(n_iters + 1), desc='hand optimizing process') if self.nbatches > 1 \
             else range(n_iters + 1)
         for iter_step in iter_range:
-            loss = self.forward(obstacle)
+            loss = self.forward(obstacles)
 
             if iter_step >= 0:
                 loss_mask = loss < min_loss
@@ -826,10 +827,9 @@ class HandOptimizer(torch.nn.Module):
             # print(self.optimizer.state_dict())
             # print('{}-th iter: {}'.format(iter_step, loss.mean().item()))
 
-    def step_optimize(self, cur_wrist_pos: Optional[Union[np.ndarray, torch.Tensor]] = None,
+    def step_optimize(self, mj_data: mj.MjData,
+                      cur_wrist_pos: Optional[Union[np.ndarray, torch.Tensor]] = None,
                       cur_wrist_rot: Optional[Union[np.ndarray, torch.Tensor]] = None,
-                      cur_obj_geom_poses: Optional[dict[str, Union[np.ndarray, torch.Tensor]]] = None,
-                      cur_obst_geom_poses: Optional[list[Union[np.ndarray, torch.Tensor]]] = None,
                       substeps_num: int = 1) -> HandGrasp:
         # Transform wrist
         with torch.no_grad():
@@ -844,15 +844,19 @@ class HandOptimizer(torch.nn.Module):
                                                  device=self.device)
 
         # Transform objects & obstacles
-        if cur_obj_geom_poses:
-            self.object_data.transform_to(cur_obj_geom_poses)
+        self.object_data.step(mj_data)
+        if self.obstacles_data:
+            for obst in self.obstacles_data:
+                obst.step(mj_data)
+        # if cur_obj_geom_poses:
+        # self.object_data.transform_to(cur_obj_geom_poses)
 
-        if cur_obst_geom_poses and self.obstacle_data:
-            self.obstacle_data.transform_to(cur_obst_geom_poses)
+        # if cur_obst_geom_poses and self.obstacle_data:
+        #   self.obstacle_data.transform_to(cur_obst_geom_poses)
 
         # Next optimal grasp
         self.optimize(cur_wrist_pos, cur_wrist_rot,
-                      obstacle=self.obstacle_data, n_iters=substeps_num)
+                      obstacles=self.obstacles_data, n_iters=substeps_num)
 
         return self.best_grasp_configuration(save_real=False)
 

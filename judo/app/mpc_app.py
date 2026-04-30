@@ -120,8 +120,6 @@ class MPCApp:
             # MUJOCO-Specific controllers
             if self.is_mujoco and robot_class:
                 OBJ_NAME = robot_class.OBJECT_NAMES[0]
-                OBJ_BODY_NAMES = [OBJ_NAME]
-                OBJ_GEOM_NAMES = [f"mug_handle{i}" for i in range(4)] if OBJ_NAME == "mug" else [OBJ_NAME]
                 # Arm controller
                 self.mj_spec = self.sim.task.mj_spec
                 self.mj_model = self.sim.task.mj_sim_model
@@ -145,6 +143,8 @@ class MPCApp:
                 self.diff_ik.init()
 
                 # Object
+                OBJ_BODY_NAMES = [OBJ_NAME]
+                OBJ_GEOM_NAMES = [f"mug_handle{i}" for i in range(4)] if OBJ_NAME == "mug" else [OBJ_NAME]
                 self.obj = self.mj_data.body(OBJ_NAME)
                 self.obj_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in OBJ_GEOM_NAMES}
                 self.object_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data, self.mj_spec,
@@ -154,16 +154,30 @@ class MPCApp:
                                                                                           OBJ_NAME)),
                                                                  is_collision=True,
                                                                  merging_meshes=False,
-                                                                 npoints_each_geom=500,
+                                                                 npoints_each_geom=10,
                                                                  device=self.device)
 
+                # Obstacle
+                OBJ_OBSTACLE_GEOM_NAMES = [f"mug_base{i}" for i in range(4)] + [f"mug_trunk{i}" for i in range(6)] \
+                    if OBJ_NAME == "mug" else []
+                self.obstacle_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in OBJ_OBSTACLE_GEOM_NAMES}
+                self.obj_obstacle_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data, self.mj_spec,
+                                                                       body_names=OBJ_BODY_NAMES,
+                                                                       geom_names=OBJ_OBSTACLE_GEOM_NAMES,
+                                                                       meshdir=str(
+                                                                           os.path.join(MJMANIP_OBJECT_MODELS_DIR,
+                                                                                        OBJ_NAME)),
+                                                                       is_collision=True,
+                                                                       merging_meshes=False,
+                                                                       npoints_each_geom=10,
+                                                                       device=self.device) if OBJ_OBSTACLE_GEOM_NAMES else None
                 # Base platform (as one of obstacles)
                 self.base_platform = self.mj_data.body(robot_class.BASE_PLATFORM_NAME)
                 self.base_platform_geoms = mj_body_geoms_data(self.mj_model, self.mj_data, self.base_platform.name)
                 self.base_platform_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data, self.mj_spec,
                                                                         body_names=[self.base_platform.name],
                                                                         is_collision=True,
-                                                                        npoints_each_geom=1000,
+                                                                        npoints_each_geom=100,
                                                                         device=self.device)
 
                 # Hand controller
@@ -173,33 +187,25 @@ class MPCApp:
                                                       joint_limit_lower=-np.pi / 6,
                                                       joint_limit_upper=np.pi / 6)
                 self.hand_base = self.mj_data.body(robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME))
-                if True:
-                    self.hand_opt = HandOptimizer(
-                        hand_params=HandParams(hand_model_name=self.robot_class.HAND_MODEL_NAME,
-                                               xml_path=self.robot_class.HAND_XML_PATH,
-                                               joint_angles=torch.from_numpy(
-                                                   np.array(self.mj_data.qpos[self.hand_qpos_ids])).
-                                               float().to(device).unsqueeze(0)),
-                        object_data=self.object_data,
-                        obstacle_data=self.base_platform_data,
-                        opt_params=self.opt_params,
-                        apply_force_closure=True,
-                        to_mano_frame=False,
-                        device=self.device)
-                else:
-                    self.hand_opt = HandOptimizer(
-                        hand_params=HandParams.get(hand_model_name=self.robot_class.HAND_MODEL_NAME,
-                                                   xml_path=self.robot_class.HAND_XML_PATH,
-                                                   joint_angles=np.array(self.mj_data.qpos[self.hand_qpos_ids],
-                                                                         dtype=np.float32),
-                                                   hand_pos=self.hand_base.xpos.copy(),
-                                                   hand_quat=self.hand_base.xquat.copy()),
-                        object_data=self.object_data,
-                        obstacle_data=self.base_platform_data,
-                        opt_params=self.opt_params,
-                        apply_force_closure=True,
-                        to_mano_frame=False,
-                        device=self.device)
+                hand_params = HandParams(hand_model_name=self.robot_class.HAND_MODEL_NAME,
+                                         xml_path=self.robot_class.HAND_XML_PATH,
+                                         joint_angles=torch.from_numpy(np.array(self.mj_data.qpos[self.hand_qpos_ids],
+                                                                                dtype=np.float32)).to(device).
+                                         unsqueeze(0)) if True \
+                    else HandParams.get(hand_model_name=self.robot_class.HAND_MODEL_NAME,
+                                        xml_path=self.robot_class.HAND_XML_PATH,
+                                        joint_angles=np.array(self.mj_data.qpos[self.hand_qpos_ids], dtype=np.float32),
+                                        hand_pos=self.hand_base.xpos.copy(),
+                                        hand_quat=self.hand_base.xquat.copy())
+                self.hand_opt = HandOptimizer(
+                    hand_params=hand_params,
+                    object_data=self.object_data,
+                    obstacles_data=[self.base_platform_data] +
+                                   [self.obj_obstacle_data] if self.obj_obstacle_data else [],
+                    opt_params=self.opt_params,
+                    apply_force_closure=True,
+                    to_mano_frame=False,
+                    device=self.device)
 
     @property
     def is_mujoco(self):
@@ -329,10 +335,9 @@ class MPCApp:
         cur_wrist_rot = torch.tensor(cur_hand_quat).repeat(hand_batches_num, 1) if self.hand_opt.use_quat \
             else (roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(torch.tensor(cur_hand_quat)))
                   .repeat(hand_batches_num, 1, 1))
-        next_grasp = self.hand_opt.step_optimize(cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
-                                                 cur_wrist_rot=cur_wrist_rot,
-                                                 cur_obj_geom_poses=self._get_geoms_poses(self.obj_geoms),
-                                                 cur_obst_geom_poses=self._get_geoms_poses(self.base_platform_geoms))
+        next_grasp = self.hand_opt.step_optimize(self.mj_data,
+                                                 cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
+                                                 cur_wrist_rot=cur_wrist_rot)
         self.mj_robot_ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles
         mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
                       pos=next_grasp.wrist_pos, quat=next_grasp.wrist_quat)
@@ -445,3 +450,11 @@ class MPCApp:
                             positions=obj_points,
                             sizes=len(obj_points) * [[0.005]],
                             rgbas=len(obj_points) * [[0, 1, 0, 1]])
+
+            if False:
+                obj_obst_points = np.concat(
+                    [obst.all_points.detach().cpu().numpy() for obst in self.hand_opt.obstacles_data]).tolist()
+                mj_draw_spheres(self.sim.mj_viewer.user_scn,
+                                positions=obj_obst_points,
+                                sizes=len(obj_obst_points) * [[0.005]],
+                                rgbas=len(obj_obst_points) * [[1, 0, 0, 1]])

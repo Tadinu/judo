@@ -78,16 +78,15 @@ if __name__ == "__main__":
                                  opt_params=opt_params,
                                  device=device)
 
-        hand_opt.optimize(obstacle=None, n_iters=200)
+        hand_opt.optimize(obstacles=None, n_iters=200)
         grasp = hand_opt.best_grasp_configuration()
 
         # One more step
         if False:
             new_wrist_rot = torch.tensor([0.71, 0.71, 0, 0]).repeat(BATCHES_NUM, 1) if hand_opt.use_quat \
                 else roma.unitquat_to_rotmat(torch.tensor([0.71, 0.71, 0, 0])).repeat(BATCHES_NUM, 1, 1)
-            grasp = hand_opt.step_optimize(cur_wrist_pos=np.tile([0, 0, 0.1], (BATCHES_NUM, 1)),
+            grasp = hand_opt.step_optimize(mj_data=None, cur_wrist_pos=np.tile([0, 0, 0.1], (BATCHES_NUM, 1)),
                                            cur_wrist_rot=new_wrist_rot,
-                                           cur_obj_geom_poses=[np.array([0, 0, 0, 1, 0, 0, 0])],
                                            substeps_num=200)
 
         # Visualize

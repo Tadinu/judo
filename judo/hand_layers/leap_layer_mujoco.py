@@ -20,7 +20,7 @@ from judo import PACKAGE_ROOT
 from judo.hand_layers.leap_layer import LeapHandLayer, LeapAnchor
 
 # mjmanip
-from mjmanip.utils import IDENTITY_POSE, mj_step, mj_draw_pointcloud
+from mjmanip.utils import IDENTITY_POSE, mj_step, mj_draw_pointcloud, mj_mat_to_pose
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.warp_utils import wp_transform_from_mj, wp_kernel_transform_mesh_points, wp_kernel_compute_vertex_normals
 from mjmanip.pytorch3d_utils import p3d_transform_points, mjw_geoms_to_pytorch3d_meshes
@@ -181,7 +181,7 @@ class MJLeapHandLayer(LeapHandLayer):
         wp_meshes_points, wp_meshes_normals = self.create_mesh_verts_normals(self.hand_surface_points, to_wp=True)
         for geom_name, geom_surface_points in self.hand_surface_points.items():
             mj_body = self.mj_data.body(self.mj_model.geom(geom_name).bodyid[0])
-            geom_local_pose = self.ori_hand_meshes[geom_name][1]
+            geom_local_pose = mj_mat_to_pose(self.ori_hand_meshes[geom_name][2])
 
             wp.launch(kernel=wp_kernel_transform_mesh_points,
                       dim=len(wp_meshes_points[geom_name]),
