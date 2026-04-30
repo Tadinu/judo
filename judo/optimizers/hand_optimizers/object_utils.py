@@ -114,6 +114,28 @@ class ObjectData:
         if visualized:
             trimesh.Scene(geom_meshes).show()
             trimesh.Scene(trimesh.PointCloud(torch.cat(list(geom_points.values())).detach().cpu().numpy())).show()
+
+        # NEWTON OBJ
+        if False:
+            import warp as wp
+            from mjmanip.robot.panda_leap_mjx import PandaLeapMjx
+            from mjmanip.warp_utils import wp_transform_from_mj
+            from mjmanip.newton.newton_utils import nt_create_object_model
+            from mjmanip.control.fabrics.worlds.world_mesh_model import WorldObject
+            OBJ_NAME = PandaLeapMjx.OBJECT_NAMES[0]
+            object_model_path = PandaLeapMjx.OBJECT_MODEL_PATHS[OBJ_NAME]
+            OBJ_GEOM_NAMES = [f"mug_handle{i}" for i in range(4)] if OBJ_NAME == "mug" else [OBJ_NAME]
+            object_model, object_model_builder = nt_create_object_model(object_model_path, device=device)
+
+            # Create object data in [self.objects] dict
+            base_body_data = mj_data.body(body_names[0])
+            obj = WorldObject(OBJ_NAME, object_model_path, object_model, object_model_builder,
+                              wp_transform_from_mj(np.concat([base_body_data.xpos, base_body_data.xquat])),
+                              # wp.transform_identity(dtype=float),
+                              wp.vec3(1, 1, 1), OBJ_GEOM_NAMES, True, 0)
+            for geom_name, nt_mesh in obj.shape_newton_meshes.items():
+                geom_points[geom_name] = torch.from_numpy(nt_mesh.vertices).float().to(device)
+                geom_normals[geom_name] = torch.from_numpy(nt_mesh.normals).float().to(device)
         return ObjectData(geom_points=geom_points,
                           geom_normals=geom_normals,
                           geom_mesh_paths=geom_mesh_paths,
