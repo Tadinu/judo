@@ -11,7 +11,7 @@ import mujoco as mj
 # mjmanip
 from mjmanip import DEFAULT_SCENE_MJX_XML_PATH, DEFAULT_SCENE_XML_PATH
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
-from mjmanip.utils import IDENTITY_WXYZ, mj_body_free_joint_name, mj_get_site_pose
+from mjmanip.utils import IDENTITY_WXYZ, mj_body_free_joint_name, mj_get_site_pose, mj_get_mocap_pose, mj_move_mocap
 
 # judo
 from judo.hand_layers.leap_layer import USE_LEAP_MJX
@@ -45,6 +45,7 @@ if TYPE_CHECKING:
 OBJ_NAME = PANDA_LEAP.OBJECT_NAMES[0]
 USE_EE_MPC = False
 EE_DOFS_NO = 6
+PANDA_LEAP.OBJECT_GRASP_TARGET_SITE_NAME = "mug_handle_center" if OBJ_NAME == 'mug' else OBJ_NAME
 
 
 @slider("w_pos", 0.0, 200.0)
@@ -80,15 +81,14 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         self.goal_pos = self.config.goal_pos
         self.goal_quat = self.config.goal_quat
         self.qpos_home = self.config.qpos_home
-        self.robot_env = None
-        self.robot = None
         self.cur_phase_start_time: dict[ObjectRelocatingPhase, float] = {}
         self.last_phase = ObjectRelocatingPhase.REACHING_OBJ
         self.cur_phase_start_time[ObjectRelocatingPhase.REACHING_OBJ] = time.time()
+        self.desired_grasp_direction: np.ndarray = None
 
         self.map_controls = self.map_ee_to_arm_controls if USE_EE_MPC else None
-
         self.rollout_diff_iks = None
+
         self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, PANDA_LEAP, self.qpos_home)
         self.diff_ik.DT = self.mj_model.opt.timestep
         self.diff_ik.init()
@@ -101,22 +101,29 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         self.hand_dof_ids = mj_get_dof_ids(self.mj_model,
                                            PANDA_LEAP.hand_items_full_names(PANDA_LEAP.HAND_JOINTS_NAMES))
         self.target_mocap_id = mj_get_mocap_id(self.mj_model, PANDA_LEAP.goal_name(OBJ_NAME))
-        self.grasp_site_name = PANDA_LEAP.hand_item_full_name(PANDA_LEAP.GRASP_SITE_NAME)
+        self.grasp_site_name = PANDA_LEAP.hand_item_full_name(PANDA_LEAP.HAND_GRASP_SITE_NAME)
         self.grasp_site_id = self.mj_model.site(self.grasp_site_name).id
-        self.grasp_direction_site_name = PANDA_LEAP.hand_item_full_name(f"direction_{PANDA_LEAP.GRASP_SITE_NAME}")
+        self.grasp_direction_site_name = PANDA_LEAP.hand_item_full_name(f"direction_{PANDA_LEAP.HAND_GRASP_SITE_NAME}")
 
         # distance sensors
         # NOTE: For rollout result analysis, these are only valid IF MuJoCo-C Rollout backend supports mocap_pos/quat
         # for the `initial_state`
         # distance sensors
-        self.obj_pos_distance_to_grasp_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_grasp")
+        self.obj_pos_distance_to_grasp_sensor_idx = self.get_sensor_start_index(
+            f"{PANDA_LEAP.OBJECT_GRASP_TARGET_SITE_NAME}_distance_to_{PANDA_LEAP.full_hand_grasp_site_name()}")
         self.obj_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_goal")
         self.obj_quat_distance_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_orientation_distance_to_goal")
 
-        # grasp site sensors
+        # hand grasp site sensors
         self.grasp_site_pos_sensor_idx = self.get_sensor_start_index(f"{self.grasp_site_name}_position")
-        self.grasp_direction_site_pose_sensor_idx = self.get_sensor_start_index(
+        self.grasp_direction_site_pos_sensor_idx = self.get_sensor_start_index(
             f"{self.grasp_direction_site_name}_position")
+
+        # obj grasp site sensors
+        self.obj_grasp_site_pos_sensor_idx = self.get_sensor_start_index(
+            "mug_handle_center_position") if OBJ_NAME == 'mug' else None
+        self.obj_grasp_direction_site_pos_sensor_idx = self.get_sensor_start_index(
+            "mug_handle_grasp_direction_position") if OBJ_NAME == 'mug' else None
 
         # contact sensors
         self.obj_contact_with_finger_palm_sensors = [
@@ -135,12 +142,25 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         self.last_obj_distance_to_goal = 0.
 
     def mj_compose_spec(self) -> Optional[mj.MjSpec]:
-        self.robot_env = PANDA_LEAP_ENV(
+        self.mj_robot_env = PANDA_LEAP_ENV(
             world_scene_xml=DEFAULT_SCENE_MJX_XML_PATH if USE_LEAP_MJX else DEFAULT_SCENE_XML_PATH,
             arm_xml=ARM_XML_PATH,
             hand_xml=HAND_XML_PATH)
-        spec = self.robot_env.construct_main_spec(self.robot_env.meshdir, self.robot_env.texturedir)
+        spec = self.mj_robot_env.construct_main_spec(self.mj_robot_env.meshdir, self.mj_robot_env.texturedir)
         spec.option.timestep = 0.005
+
+        # Object center sensor
+        if OBJ_NAME == 'mug':
+            spec.add_sensor(name=f"mug_handle_center_position",
+                            needstage=mj.mjtStage.mjSTAGE_POS,
+                            type=mj.mjtSensor.mjSENS_FRAMEPOS,
+                            datatype=mj.mjtDataType.mjDATATYPE_REAL,
+                            objtype=mj.mjtObj.mjOBJ_SITE, objname="mug_handle_center")
+            spec.add_sensor(name=f"mug_handle_grasp_direction_position",
+                            needstage=mj.mjtStage.mjSTAGE_POS,
+                            type=mj.mjtSensor.mjSENS_FRAMEPOS,
+                            datatype=mj.mjtDataType.mjDATATYPE_REAL,
+                            objtype=mj.mjtObj.mjOBJ_SITE, objname="mug_handle_grasp_direction")
         return spec
 
     @Task.nu.getter
@@ -232,17 +252,26 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         orientation_cost = 0.05 * np.square(np_quat_diff_so3(obj_orientation, self.goal_quat)).sum(-1).mean(-1)
 
         # Stage 3: Obj Grasping cost
+        if OBJ_NAME == 'mug':
+            obj_grasp_site_pos = self.sensor_value(sensors, self.obj_grasp_site_pos_sensor_idx, 3)
+            obj_grasp_direction_site_pos = self.sensor_value(sensors, self.obj_grasp_direction_site_pos_sensor_idx, 3)
+            obj_grasp_direction = (obj_grasp_direction_site_pos - obj_grasp_site_pos) / np.linalg.norm(
+                obj_grasp_direction_site_pos - obj_grasp_site_pos, axis=2)[..., np.newaxis]
+        else:
+            obj_grasp_site_pos = obj_position
+            obj_grasp_direction = self.desired_grasp_direction
+
         grasp_site_pos = self.sensor_value(sensors, self.grasp_site_pos_sensor_idx, 3)
-        grasp_direction_site_pos = self.sensor_value(sensors, self.grasp_direction_site_pose_sensor_idx, 3)
+        grasp_direction_site_pos = self.sensor_value(sensors, self.grasp_direction_site_pos_sensor_idx, 3)
         grasp_direction = (grasp_direction_site_pos - grasp_site_pos) / np.linalg.norm(
             grasp_direction_site_pos - grasp_site_pos, axis=2)[..., np.newaxis]
-        grasp_obj_direction = (obj_position - grasp_site_pos) / np.linalg.norm(obj_position - grasp_site_pos,
-                                                                               axis=2)[..., np.newaxis]
+        grasp_obj_direction = (obj_grasp_site_pos - grasp_site_pos) / \
+                              np.linalg.norm(obj_grasp_site_pos - grasp_site_pos, axis=2)[..., np.newaxis]
         grasp_direction_cost = (
             # Palm-aimed-toward-object direction
-                5 * np.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1) +
+                5 * np.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1)
                 # Palm-face-down direction
-                10 * np.square(grasp_direction - np.array([0, 0, -1])).sum(-1).mean(-1)
+                + 10 * np.square(grasp_direction - obj_grasp_direction).sum(-1).mean(-1)
         )
 
         grasp_cost = 0.001 * np.sum(np.square(controls)) + grasp_direction_cost
@@ -298,6 +327,23 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         if cur_phase != self.last_phase:
             self.last_phase = cur_phase
             self.cur_phase_start_time[cur_phase] = time.time()
+        self.desired_grasp_direction = self._draw_desired_grasp_direction()
+
+    def _draw_desired_grasp_direction(self) -> np.ndarray:
+        if OBJ_NAME == 'mug':
+            mug_grasp_handle_center = mj_get_site_pose(self.mj_data, "mug_handle_center")[0]
+            mug_grasp_direction = mj_get_site_pose(self.mj_data, "mug_handle_grasp_direction")[
+                                      0] - mug_grasp_handle_center
+            mug_grasp_direction_quat = np.zeros(4)
+            mj.mju_quatZ2Vec(mug_grasp_direction_quat, mug_grasp_direction)
+            mj_move_mocap(self.mj_model, self.mj_data, self.mj_robot_env.main_class.EE_GUIDER_MOCAP_NAME,
+                          pos=mug_grasp_handle_center, quat=mug_grasp_direction_quat)
+            return mj.mju_normalize3(mug_grasp_direction)
+        else:
+            ee_guider_pose = mj_get_mocap_pose(self.mj_data, self.mj_robot_env.main_class.EE_GUIDER_MOCAP_NAME)
+            ee_guider_direction = np.zeros(3)
+            mj.mju_rotVecQuat(ee_guider_direction, np.array([0, 0, 1]), ee_guider_pose.quat)
+            return ee_guider_direction
 
     def pre_sim_step(self) -> None:
         self._update_goal()
@@ -331,7 +377,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             mj_model = rl_pair[0] if rl_pair else self.mj_model
             mj_data = rl_pair[1] if rl_pair else self.mj_data
             diff_ik = self.rollout_diff_iks[rollout_idx] if model_data_pairs else self.diff_ik
-            obj = mj_data.body(OBJ_NAME)
+            # obj = mj_data.body(OBJ_NAME)
             for step_idx in range(num_steps):
                 # Step [mj_data] kinematics only
                 if model_data_pairs:

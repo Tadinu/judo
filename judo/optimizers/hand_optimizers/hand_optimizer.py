@@ -125,6 +125,7 @@ class HandOptimizer(torch.nn.Module):
         self.nbatches = opt_params.nbatches if opt_params else 1
         # Note: Force closure loss does not play much help in our observation!!!
         self.apply_force_closure = apply_force_closure
+        self.cur_loss = 1001
 
         # Object/Obstacle data
         assert object_data
@@ -615,7 +616,7 @@ class HandOptimizer(torch.nn.Module):
                 obst.all_normals.repeat(self.nbatches, 1, 1))
 
             h2o_dist_neg = torch.logical_and(h2o_signed.abs() < 0.05, h2o_signed < 0.0)
-            hand_obstacle_collision_loss = -20 * torch.sum(h2o_signed * h2o_dist_neg, dim=1)
+            hand_obstacle_collision_loss = -200 * torch.sum(h2o_signed * h2o_dist_neg, dim=1)
         # torch.cuda.synchronize()
         # time_start = time.time()
 
@@ -782,7 +783,7 @@ class HandOptimizer(torch.nn.Module):
                          obj_mesh_paths=self.object_data.geom_mesh_paths)
 
     def optimize(self, cur_wrist_pos: Optional[torch.Tensor] = None, cur_wrist_rot: Optional[torch.Tensor] = None,
-                 obstacles: Optional[list[ObjectData]] = None, n_iters=1000):
+                 obstacles: Optional[list[ObjectData]] = None, n_iters=1000) -> torch.Tensor:
         min_loss = 1e8
 
         # Update [self.cur_wrist_pose]
@@ -826,6 +827,7 @@ class HandOptimizer(torch.nn.Module):
 
             # print(self.optimizer.state_dict())
             # print('{}-th iter: {}'.format(iter_step, loss.mean().item()))
+            return loss
 
     def step_optimize(self, mj_data: mj.MjData,
                       cur_wrist_pos: Optional[Union[np.ndarray, torch.Tensor]] = None,
@@ -855,8 +857,8 @@ class HandOptimizer(torch.nn.Module):
         #   self.obstacle_data.transform_to(cur_obst_geom_poses)
 
         # Next optimal grasp
-        self.optimize(cur_wrist_pos, cur_wrist_rot,
-                      obstacles=self.obstacles_data, n_iters=substeps_num)
+        self.cur_loss = self.optimize(cur_wrist_pos, cur_wrist_rot,
+                                      obstacles=self.obstacles_data, n_iters=substeps_num)
 
         return self.best_grasp_configuration(save_real=False)
 

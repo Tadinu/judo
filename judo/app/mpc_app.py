@@ -19,6 +19,13 @@ import roma
 import mujoco as mj
 from mujoco import viewer
 
+# mjmanip
+from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
+from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
+from mjmanip.utils import (mj_body_geoms_data, mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap,
+                           mj_clear_scene, mj_draw_spheres, mj_get_mocap_pose)
+from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
+
 # judo
 from judo import BackendType
 from judo.config import get_override_config
@@ -29,15 +36,8 @@ from judo.utils.fabrics_utils import FabricsAgent, FABRICS_MPC_TYPE
 from judo.app.structs import SplineData
 from judo.app.utils import get_class_from_string
 
-# mjmanip
-from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
-from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
-from mjmanip.utils import (mj_body_geoms_data, mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap,
-                           mj_clear_scene, mj_draw_spheres)
-from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
-
 # hand optimizer
-from judo.optimizers.hand_optimizers.hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams
+from judo.optimizers.hand_optimizers.hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams, HandGrasp
 from judo.optimizers.hand_optimizers.object_utils import ObjectData
 from judo.app.utils import set_seed
 
@@ -144,7 +144,7 @@ class MPCApp:
 
                 # Object
                 OBJ_BODY_NAMES = [OBJ_NAME]
-                OBJ_GEOM_NAMES = [f"mug_handle{i}" for i in range(4)] if OBJ_NAME == "mug" else [OBJ_NAME]
+                OBJ_GEOM_NAMES = robot_class.OBJECT_GEOM_NAMES[OBJ_NAME]
                 self.obj = self.mj_data.body(OBJ_NAME)
                 self.obj_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in OBJ_GEOM_NAMES}
                 self.object_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data, self.mj_spec,
@@ -158,19 +158,22 @@ class MPCApp:
                                                                  device=self.device)
 
                 # Obstacle
-                OBJ_OBSTACLE_GEOM_NAMES = [f"mug_base{i}" for i in range(4)] + [f"mug_trunk{i}" for i in range(6)] \
-                    if OBJ_NAME == "mug" else []
-                self.obstacle_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in OBJ_OBSTACLE_GEOM_NAMES}
-                self.obj_obstacle_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data, self.mj_spec,
-                                                                       body_names=OBJ_BODY_NAMES,
-                                                                       geom_names=OBJ_OBSTACLE_GEOM_NAMES,
-                                                                       meshdir=str(
-                                                                           os.path.join(MJMANIP_OBJECT_MODELS_DIR,
-                                                                                        OBJ_NAME)),
-                                                                       is_collision=True,
-                                                                       merging_meshes=False,
-                                                                       npoints_each_geom=10,
-                                                                       device=self.device) if OBJ_OBSTACLE_GEOM_NAMES else None
+                OBJ_COLLISION_GEOM_NAMES = robot_class.OBJECT_COLLISION_GEOM_NAMES[OBJ_NAME]
+                self.obstacle_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in
+                                       OBJ_COLLISION_GEOM_NAMES}
+                self.obj_obstacle_data = ObjectData.get_mj_object_data(
+                    self.mj_model, self.mj_data, self.mj_spec,
+                    body_names=OBJ_BODY_NAMES,
+                    geom_names=OBJ_COLLISION_GEOM_NAMES,
+                    meshdir=str(
+                        os.path.join(MJMANIP_OBJECT_MODELS_DIR,
+                                     OBJ_NAME)),
+                    is_collision=True,
+                    merging_meshes=False,
+                    npoints_each_geom=10,
+                    device=self.device
+                ) if OBJ_COLLISION_GEOM_NAMES else None
+
                 # Base platform (as one of obstacles)
                 self.base_platform = self.mj_data.body(robot_class.BASE_PLATFORM_NAME)
                 self.base_platform_geoms = mj_body_geoms_data(self.mj_model, self.mj_data, self.base_platform.name)
@@ -206,6 +209,7 @@ class MPCApp:
                     apply_force_closure=True,
                     to_mano_frame=False,
                     device=self.device)
+                self.next_grasp: HandGrasp = None
 
     @property
     def is_mujoco(self):
@@ -237,6 +241,9 @@ class MPCApp:
                 # Plan
                 if self.synchronous_controller and (self.step_cnt % num_steps == 0 if num_steps > 1 else True):
                     self.plan()
+
+                # GUI visualizing
+                self.robot_class.visualize(viewer=mj_viewer, data=self.mj_data)
 
                 # Step
                 self.sim.step()
@@ -335,15 +342,15 @@ class MPCApp:
         cur_wrist_rot = torch.tensor(cur_hand_quat).repeat(hand_batches_num, 1) if self.hand_opt.use_quat \
             else (roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(torch.tensor(cur_hand_quat)))
                   .repeat(hand_batches_num, 1, 1))
-        next_grasp = self.hand_opt.step_optimize(self.mj_data,
-                                                 cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
-                                                 cur_wrist_rot=cur_wrist_rot)
-        self.mj_robot_ctrl[self.hand_ctrl_ids] = next_grasp.joint_angles
+        self.next_grasp = self.hand_opt.step_optimize(self.mj_data,
+                                                      cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
+                                                      cur_wrist_rot=cur_wrist_rot)
+        self.mj_robot_ctrl[self.hand_ctrl_ids] = self.next_grasp.joint_angles
         mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
-                      pos=next_grasp.wrist_pos, quat=next_grasp.wrist_quat)
+                      pos=self.next_grasp.wrist_pos, quat=self.next_grasp.wrist_quat)
 
         # Arm plan
-        next_grasp_pose = next_grasp.wrist_pose
+        next_grasp_pose = self.next_grasp.wrist_pose
         q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=True)
         if q is None:
             q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=False)
@@ -352,7 +359,7 @@ class MPCApp:
         # Visualize
         visualize_grasp = False
         if visualize_grasp:
-            self.hand_opt.visualize_grasp(next_grasp, self.object_data.meshes)
+            self.hand_opt.visualize_grasp(self.next_grasp, self.object_data.meshes)
 
         # Traces
         # Hand pcl

@@ -127,9 +127,9 @@ class LeapFreeJointObjectPick(LeapCube):
         self.obj_dof_ids = mj_get_dof_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
         self.hand_dof_ids = mj_get_dof_ids(self.mj_model, hand_class.HAND_JOINTS_NAMES)
         self.target_mocap_id = mj_get_mocap_id(self.mj_model, hand_class.goal_name(OBJ_NAME))
-        self.grasp_site_name = hand_class.GRASP_SITE_NAME
+        self.grasp_site_name = hand_class.HAND_GRASP_SITE_NAME
         self.grasp_site_id = self.mj_model.site(self.grasp_site_name).id
-        self.grasp_direction_site_name = f"direction_{hand_class.GRASP_SITE_NAME}"
+        self.grasp_direction_site_name = f"direction_{hand_class.HAND_GRASP_SITE_NAME}"
         self.obj_pos_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_position")
 
         # distance sensors
@@ -142,7 +142,7 @@ class LeapFreeJointObjectPick(LeapCube):
 
         # grasp site sensors
         self.grasp_site_pos_sensor_idx = self.get_sensor_start_index(f"{self.grasp_site_name}_position")
-        self.grasp_direction_site_pose_sensor_idx = self.get_sensor_start_index(
+        self.grasp_direction_site_pos_sensor_idx = self.get_sensor_start_index(
             f"{self.grasp_direction_site_name}_position")
 
         # contact sensors
@@ -269,7 +269,7 @@ class LeapFreeJointObjectPick(LeapCube):
 
         # Stage 3: Obj Grasping cost
         grasp_site_pos = self.sensor_value(sensors, self.grasp_site_pos_sensor_idx, 3)
-        grasp_direction_site_pos = self.sensor_value(sensors, self.grasp_direction_site_pose_sensor_idx, 3)
+        grasp_direction_site_pos = self.sensor_value(sensors, self.grasp_direction_site_pos_sensor_idx, 3)
         grasp_direction = (grasp_direction_site_pos - grasp_site_pos) / np.linalg.norm(
             grasp_direction_site_pos - grasp_site_pos, axis=2)[..., np.newaxis]
         grasp_obj_direction = (obj_position - grasp_site_pos) / np.linalg.norm(obj_position - grasp_site_pos,

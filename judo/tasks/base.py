@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from judo.simulation.base import Simulation
 
 # mjmanip
-from mjmanip.robot.arm_hand import ArmHand
+from mjmanip.robot.arm_hand import ArmHand, ArmHandEnv
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 
 
@@ -77,6 +77,8 @@ class Task(ABC, Generic[ConfigT]):
         self.optimal_target_traces: list[np.ndarray] = []
 
         # MuJoCo
+        self.mj_robot_env: ArmHandEnv = None
+        self.mj_robot: ArmHand = None
         is_mujoco_backend = (backend_type == BackendType.MUJOCO or backend_type == BackendType.MUJOCO_WARP)
         self.mj_spec = self.mj_compose_spec() if is_mujoco_backend else None
         self.mj_model = self.mj_spec.compile() if is_mujoco_backend else None
