@@ -1,0 +1,108 @@
+fabric_params:
+  cspace_attractor:
+    min_isotropic_mass: 1.
+    max_isotropic_mass: 1.
+    mass_sharpness: 20.0
+    mass_switch_offset: 1.
+    conical_sharpness: 20.
+    conical_gain: 1.
+  joint_limit_repulsion:
+    velocity_gate: True
+    breakaway_distance: 0.0
+    breakaway_velocity: 0.
+    soft_relu_gain: 8.
+    metric_scalar: 0.02
+    metric_exploder_offset: 0.1
+    max_metric: 100.
+    damping_gain: 8.
+  hand_attractor:
+    min_isotropic_mass: 8.
+    max_isotropic_mass: 8.
+    mass_sharpness: 20.
+    mass_switch_offset: 0.5
+    conical_sharpness: 40.
+    conical_gain: 50.
+    damping: 50.
+    damping_sharpness: 10.
+    damping_radius: 0.2
+  palm_attractor:
+    min_isotropic_mass: 1.
+    max_isotropic_mass: 1.
+    mass_sharpness: 10.
+    mass_switch_offset: 0.5
+    conical_sharpness: 40. # 10. for 12 dim pose attractor
+    conical_gain: 50.
+    damping: 50. #25. # 50.
+    damping_sharpness: 10. # 20. for the 12 dim pose attractor
+    damping_radius: .2 #1.32 # 1. for 12 dim pose attractor
+  body_repulsion:
+    max_depth: 2.
+    min_depth: 0.01
+    engage_depth: 0.5
+    breakaway_depth: 0.0
+    breakaway_velocity: 0.
+    metric_scalar: 1.
+    velocity_gate: True
+    velocity_gate_sharpness: 1000.
+    velocity_gate_offset: 0.002
+    rescaled_min_dist: .01
+    forcing_metric_scalar: .01
+    geom_metric_scalar: .01
+    constant_accel: 1.
+    constant_accel_geom: 5.
+    damping_gain: 0. #25. #30.
+    collision_sphere_frames:
+      [ "link2_fabric1", "link2_fabric2",
+        "link3_fabric",
+        "link4_fabric1",
+        "link4_fabric2",
+        "link5_fabric1","link5_fabric2",
+        "link6_fabric",
+        "link7_fabric",
+        "leap_rh_mjx_fabric/leap_mount_fabric",
+        "leap_rh_mjx_fabric/palm_fabric",
+        "leap_rh_mjx_fabric/if_bs_fabric",
+        "leap_rh_mjx_fabric/if_px_fabric1", "leap_rh_mjx_fabric/if_px_fabric2",
+        "leap_rh_mjx_fabric/if_ds_fabric1", "leap_rh_mjx_fabric/if_ds_fabric2",
+        "leap_rh_mjx_fabric/mf_bs_fabric",
+        "leap_rh_mjx_fabric/mf_px_fabric1", "leap_rh_mjx_fabric/mf_px_fabric2",
+        "leap_rh_mjx_fabric/mf_ds_fabric1", "leap_rh_mjx_fabric/mf_ds_fabric2",
+        "leap_rh_mjx_fabric/rf_bs_fabric",
+        "leap_rh_mjx_fabric/rf_px_fabric1", "leap_rh_mjx_fabric/rf_px_fabric2",
+        "leap_rh_mjx_fabric/rf_ds_fabric1", "leap_rh_mjx_fabric/rf_ds_fabric2",
+        "leap_rh_mjx_fabric/th_px_fabric",
+        "leap_rh_mjx_fabric/th_ds_fabric1", "leap_rh_mjx_fabric/th_ds_fabric2"
+      ]
+    collision_sphere_radii: [ ]
+    collision_sphere_pairs: [ ]
+    collision_link_prefix_pairs: [ [ "leap_rh_mjx_fabric/palm", "link2" ],
+                                   [ "leap_rh_mjx_fabric/if_px", "link2" ],
+                                   [ "leap_rh_mjx_fabric/if_md", "link2" ],
+                                   [ "leap_rh_mjx_fabric/if_ds", "link2" ],
+                                   [ "leap_rh_mjx_fabric/mf_px", "link2" ],
+                                   [ "leap_rh_mjx_fabric/mf_md", "link2" ],
+                                   [ "leap_rh_mjx_fabric/mf_ds", "link2" ],
+                                   [ "leap_rh_mjx_fabric/rf_px", "link2" ],
+                                   [ "leap_rh_mjx_fabric/rf_md", "link2" ],
+                                   [ "leap_rh_mjx_fabric/rf_ds", "link2" ],
+                                   [ "leap_rh_mjx_fabric/th_bs", "link2" ],
+                                   [ "leap_rh_mjx_fabric/th_px", "link2" ],
+                                   [ "leap_rh_mjx_fabric/th_ds", "link2" ] ]
+  cspace_damping:
+    gain: 10.
+  speed_control:
+    active: False
+    energy_target: 10.
+    damping: 100.
+  joint_limits:
+    active: True
+    accelerations: [ 7.5, 7.5, 10., 10., 10., 20., 20.,
+                     22.5, 22.5, 22.5, 22.5,
+                     22.5, 22.5, 22.5, 22.5,
+                     22.5, 22.5, 22.5, 22.5,
+                     22.5, 22.5, 22.5, 22.5 ]
+    jerks: [ 3750., 3750., 5000., 5000., 5000., 10000., 10000.,
+             2250., 2250., 2250., 2250.,
+             2250., 2250., 2250., 2250.,
+             2250., 2250., 2250., 2250.,
+             2250., 2250., 2250., 2250. ]

@@ -19,6 +19,7 @@ from mjmanip.pytorch3d_utils import p3d_transform_points
 
 @dataclass
 class ObjectData:
+    obj_name: str
     geom_points: dict[str, torch.Tensor]
     geom_normals: dict[str, torch.Tensor]
     geom_meshes: dict[str, trimesh.Trimesh]
@@ -30,7 +31,7 @@ class ObjectData:
     npoints_each_geom: int = 1000
 
     @classmethod
-    def get_geoms_data(cls, geom_mesh_paths: dict[str, str], voxel_size=0.006, scale=1.0, vis=False,
+    def get_geoms_data(cls, obj_name: str, geom_mesh_paths: dict[str, str], voxel_size=0.006, scale=1.0, vis=False,
                        watertight_process=True,
                        npoints_each_geom: int = 1000,
                        device: Union[torch.device, str] = 'cuda') -> ObjectData:
@@ -51,7 +52,7 @@ class ObjectData:
             geom_normals[geom_name] = torch.tensor(n_sampled, dtype=torch.float32, device=device)
             geom_tfs[geom_name] = np.eye(4)
 
-        return ObjectData(geom_points=geom_points,
+        return ObjectData(obj_name=obj_name, geom_points=geom_points,
                           geom_normals=geom_normals,
                           geom_mesh_paths=geom_mesh_paths,
                           geom_meshes=geom_meshes,  # scaled mesh
@@ -60,7 +61,7 @@ class ObjectData:
                           npoints_each_geom=npoints_each_geom)
 
     @classmethod
-    def get_mj_object_data(cls, mj_model: Union[mj.MjModel, str], mj_data: Optional[mj.MjData] = None,
+    def get_mj_object_data(cls, obj_name: str, mj_model: Union[mj.MjModel, str], mj_data: Optional[mj.MjData] = None,
                            mj_spec: Optional[mj.MjSpec] = None,
                            meshdir: Optional[str] = None,
                            body_names: Optional[list[str]] = None,
@@ -139,7 +140,7 @@ class ObjectData:
             for geom_name, nt_mesh in obj.shape_newton_meshes.items():
                 geom_points[geom_name] = torch.from_numpy(nt_mesh.vertices).float().to(device)
                 geom_normals[geom_name] = torch.from_numpy(nt_mesh.normals).float().to(device)
-        return ObjectData(geom_points=geom_points,
+        return ObjectData(obj_name=obj_name, geom_points=geom_points,
                           geom_normals=geom_normals,
                           geom_mesh_paths=geom_mesh_paths,
                           geom_meshes=geom_meshes,  # already scaled meshes

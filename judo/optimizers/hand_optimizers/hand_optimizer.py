@@ -94,15 +94,24 @@ class HandParams:
 
 @dataclass
 class HandGrasp:
-    wrist_quat: Optional[np.ndarray] = None
-    wrist_pos: Optional[np.ndarray] = None
-    joint_angles: Optional[np.ndarray] = None
+    wrist_quat: Optional[Union[torch.Tensor, np.ndarray]] = None
+    wrist_pos: Optional[Union[torch.Tensor, np.ndarray]] = None
+    joint_angles: Optional[Union[torch.Tensor, np.ndarray]] = None
     obj_scale: float = 1.0
     obj_mesh_paths: Optional[dict[str, str]] = None
 
     @property
-    def wrist_pose(self):
-        return np.concatenate([self.wrist_pos, self.wrist_quat], axis=-1)
+    def wrist_pose(self) -> Union[torch.Tensor, np.ndarray]:
+        wrist_pos_quat = [self.wrist_pos, self.wrist_quat]
+        return torch.concat(wrist_pos_quat, dim=-1) if self.is_gpu else np.concatenate(wrist_pos_quat, axis=-1)
+
+    @property
+    def is_gpu(self):
+        is_gpu = isinstance(self.wrist_pos, torch.Tensor)
+        if is_gpu:
+            assert isinstance(self.wrist_quat, torch.Tensor)
+            assert isinstance(self.joint_angles, torch.Tensor)
+        return is_gpu
 
 
 class HandOptimizer(torch.nn.Module):
@@ -752,9 +761,9 @@ class HandOptimizer(torch.nn.Module):
         else:
             wrist_quat_wxyz = roma.quat_xyzw_to_wxyz(wrist_roma_quat)
 
-        return HandGrasp(wrist_quat=wrist_quat_wxyz.squeeze().cpu().numpy(),
-                         wrist_pos=wrist_pos.squeeze().cpu().numpy(),
-                         joint_angles=self.best_joint_angles.squeeze().cpu().numpy(),
+        return HandGrasp(wrist_quat=wrist_quat_wxyz.squeeze(),
+                         wrist_pos=wrist_pos.squeeze(),
+                         joint_angles=self.best_joint_angles.squeeze(),
                          obj_scale=self.object_data.scale,
                          obj_mesh_paths=self.object_data.geom_mesh_paths)
 
@@ -776,9 +785,9 @@ class HandOptimizer(torch.nn.Module):
         else:
             wrist_quat_wxyz = roma.quat_xyzw_to_wxyz(wrist_roma_quat)
 
-        return HandGrasp(wrist_quat=wrist_quat_wxyz.squeeze().cpu().numpy(),
-                         wrist_pos=wrist_pos.squeeze().cpu().numpy(),
-                         joint_angles=self.decode_joint_angles(with_limit=False).detach().squeeze().cpu().numpy(),
+        return HandGrasp(wrist_quat=wrist_quat_wxyz.squeeze(),
+                         wrist_pos=wrist_pos.squeeze(),
+                         joint_angles=self.decode_joint_angles(with_limit=False).detach().squeeze(),
                          obj_scale=self.object_data.scale,
                          obj_mesh_paths=self.object_data.geom_mesh_paths)
 

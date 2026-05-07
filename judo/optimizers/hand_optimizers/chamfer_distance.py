@@ -1,4 +1,5 @@
 # Copyright (c) Facebook, Inc. and its affiliates. All rights reserved.
+# https://github.com/otaheri/chamfer_distance/blob/master/chamfer_distance/chamfer_distance.py
 
 from typing import Union
 

@@ -61,11 +61,12 @@ if __name__ == "__main__":
         filepath_list = glob.glob('{}/*.obj'.format(mesh_dir))
 
     for obj_filepath in filepath_list:
-        object_data = ObjectData.get_geoms_data({Path(obj_filepath).stem: obj_filepath}, device=device) \
+        obj_name = Path(obj_filepath).stem
+        obj_data = ObjectData.get_geoms_data(obj_name, {obj_name: obj_filepath}, device=device) \
             if obj_filepath.endswith('.obj') else (
-            ObjectData.get_mj_object_data(obj_filepath, body_names=['mug'] if use_mug else None,
+            ObjectData.get_mj_object_data(obj_name, obj_filepath, body_names=['mug'] if use_mug else None,
                                           device=device))
-        # object_data.visualize()
+        # obj_data.visualize()
         # obj_name = obj_filepath.split('/')[-1].split('.')[0]
         hand_opt = HandOptimizer(hand_params=HandParams.get(hand_model_name=hand_model_name,
                                                             xml_path=HAND_XML_PATH,
@@ -74,7 +75,7 @@ if __name__ == "__main__":
                                                             hand_pos=np.zeros(3),
                                                             hand_quat=np.array([0.71, 0.71, 0, 0]),
                                                             nbatches=BATCHES_NUM),
-                                 object_data=object_data,
+                                 object_data=obj_data,
                                  opt_params=opt_params,
                                  device=device)
 

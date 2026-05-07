@@ -24,6 +24,8 @@ from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
 from mjmanip.utils import (mj_body_geoms_data, mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap,
                            mj_clear_scene, mj_draw_spheres, mj_get_mocap_pose)
+from mjmanip.robot.arm_hand_fabrics import ArmHandWithFabricsEnv
+from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 
 # judo
@@ -84,6 +86,7 @@ class MPCApp:
                                         task_registration_cfg=task_registration_cfg)
 
         # 2- Fabrics computation agent
+        self.fabric_cfg = fabric_cfg
         if fabric_cfg and FABRICS_MPC_TYPE:
             self.sim.fabrics_agent = FabricsAgent(self.sim.task.mj_sim_model, self.sim.task.mj_data,
                                                   fabric_cfg, num_rollout_worlds=1, num_fabrics_steps=1)
@@ -95,12 +98,12 @@ class MPCApp:
             print("FABRICS SUBSTEPS: Task Rollout", self.sim.task.fabrics_agent.num_fabrics_steps,
                   "Sim", self.sim.fabrics_agent.num_fabrics_steps)
 
-        # 3- Controller
+        # 3- Controllers
         # NOTE: Controller uses task's nu to initiate its mpc-algo/optimizer so must be after fabrics_agent,
         # which decides task's nu
-        # Whether the controller runs alongside the sim
-        self.synchronous_controller = True
-        if self.synchronous_controller:
+        # Whether the controllers run alongside the sim
+        self.synchronous_controlling = True
+        if self.synchronous_controlling:
             # MPC
             if task_registration_cfg:
                 self.sim.mpcontroller = self.mpcontroller = make_controller(
@@ -127,27 +130,29 @@ class MPCApp:
                 self.qpos_home: Optional[np.ndarray] = robot_class.ARM_HOME_QPOS + robot_class.HAND_HOME_QPOS + \
                                                        robot_class.OBJECT_INIT_POSES[OBJ_NAME].tolist()
                 self.arm_qpos_ids = mj_get_joints_qids(self.mj_model, robot_class.ARM_JOINTS_NAMES, is_qpos=True)
+                self.arm_dof_ids = mj_get_joints_qids(self.mj_model, robot_class.ARM_JOINTS_NAMES, is_qpos=False)
                 self.arm_ctrl_ids = mj_get_actuators_id_list(self.mj_model, robot_class.ARM_ACTS_NAMES)
                 self.hand_qpos_ids = mj_get_joints_qids(self.mj_model,
                                                         robot_class.hand_items_full_names(
                                                             robot_class.HAND_JOINTS_NAMES),
                                                         is_qpos=True)
+                self.hand_dof_ids = mj_get_joints_qids(self.mj_model,
+                                                       robot_class.hand_items_full_names(
+                                                           robot_class.HAND_JOINTS_NAMES),
+                                                       is_qpos=False)
                 self.hand_ctrl_ids = mj_get_actuators_id_list(self.mj_model,
                                                               robot_class.hand_items_full_names(
                                                                   robot_class.HAND_ACTS_NAMES))
+                self.robot_qpos_ids = np.concat([self.arm_qpos_ids, self.hand_qpos_ids])
+                self.robot_dof_ids = np.concat([self.arm_dof_ids, self.hand_dof_ids])
                 self.mj_robot_ctrl = self.mj_data.qpos if self.sim.kinematics_mode else self.mj_data.ctrl
-                self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, robot_class, self.qpos_home,
-                                             ee_name=robot_class.hand_item_full_name(robot_class.HAND_BASE_NAME),
-                                             ee_obj_type='body')
-                self.diff_ik.DT = self.mj_model.opt.timestep
-                self.diff_ik.init()
 
                 # Object
                 OBJ_BODY_NAMES = [OBJ_NAME]
                 OBJ_GEOM_NAMES = robot_class.OBJECT_GEOM_NAMES[OBJ_NAME]
                 self.obj = self.mj_data.body(OBJ_NAME)
                 self.obj_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in OBJ_GEOM_NAMES}
-                self.object_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data, self.mj_spec,
+                self.object_data = ObjectData.get_mj_object_data(OBJ_NAME, self.mj_model, self.mj_data, self.mj_spec,
                                                                  body_names=OBJ_BODY_NAMES,
                                                                  geom_names=OBJ_GEOM_NAMES,
                                                                  meshdir=str(os.path.join(MJMANIP_OBJECT_MODELS_DIR,
@@ -162,12 +167,11 @@ class MPCApp:
                 self.obstacle_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in
                                        OBJ_COLLISION_GEOM_NAMES}
                 self.obj_obstacle_data = ObjectData.get_mj_object_data(
+                    f"{OBJ_NAME}_obstacles",
                     self.mj_model, self.mj_data, self.mj_spec,
                     body_names=OBJ_BODY_NAMES,
                     geom_names=OBJ_COLLISION_GEOM_NAMES,
-                    meshdir=str(
-                        os.path.join(MJMANIP_OBJECT_MODELS_DIR,
-                                     OBJ_NAME)),
+                    meshdir=str(os.path.join(MJMANIP_OBJECT_MODELS_DIR, OBJ_NAME)),
                     is_collision=True,
                     merging_meshes=False,
                     npoints_each_geom=10,
@@ -177,13 +181,25 @@ class MPCApp:
                 # Base platform (as one of obstacles)
                 self.base_platform = self.mj_data.body(robot_class.BASE_PLATFORM_NAME)
                 self.base_platform_geoms = mj_body_geoms_data(self.mj_model, self.mj_data, self.base_platform.name)
-                self.base_platform_data = ObjectData.get_mj_object_data(self.mj_model, self.mj_data, self.mj_spec,
+                self.base_platform_data = ObjectData.get_mj_object_data(robot_class.BASE_PLATFORM_NAME, self.mj_model,
+                                                                        self.mj_data, self.mj_spec,
                                                                         body_names=[self.base_platform.name],
                                                                         is_collision=True,
                                                                         npoints_each_geom=100,
                                                                         device=self.device)
 
-                # Hand controller
+                # IK controllers
+                self.diff_ik: ArmHandDiffIK = None
+                self.fabrics_env_class: type[ArmHandWithFabricsEnv] = None
+                self.fabrics_env: ArmHandWithFabricsEnv = None
+                self.fabrics_robot_class: type[ArmHand] = None
+                self.fabrics_robot: ArmHand = None
+                self.fabrics_arm_xml: str = ""
+                self.fabrics_hand_xml: str = ""
+                self.fabrics_controller: FabricsController = None
+                self.init_ik_controllers()
+
+                # Hand-base/Fingers pose optimizer
                 set_seed(0)
                 self.opt_params = HandOptimizerParams(nbatches=1, distance_lower=0.05, distance_upper=0.15,
                                                       jitter_strength=0.1,
@@ -210,6 +226,31 @@ class MPCApp:
                     to_mano_frame=False,
                     device=self.device)
                 self.next_grasp: HandGrasp = None
+
+    def config_fabrics(self):
+        pass
+
+    def init_ik_controllers(self):
+        # DIFF-IK
+        self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, self.robot_class, self.qpos_home,
+                                     ee_name=self.robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME),
+                                     ee_obj_type='body')
+        self.diff_ik.DT = self.mj_model.opt.timestep
+        self.diff_ik.init()
+
+        # FABRICS
+        self.config_fabrics()
+        if self.fabrics_env_class and self.fabrics_robot_class:
+            assert self.fabrics_arm_xml and self.fabrics_hand_xml, "Fabrics armh/hand XMLs are not set!"
+            self.fabrics_robot_class.BASE_POSES = self.robot_class.BASE_POSES
+            # NOTE: MjData is created here-in if needed in robot's configuration
+            self.fabrics_env = self.fabrics_env_class(arm_hand_class=self.fabrics_robot_class,
+                                                      arm_xml=self.fabrics_arm_xml,
+                                                      hand_xml=self.fabrics_hand_xml,
+                                                      fabric_cfg=self.fabric_cfg)
+            self.fabrics_env.init()
+            self.fabrics_robot = self.fabrics_env.robots_system
+            self.fabrics_controller = self.fabrics_env.fabrics_controller
 
     @property
     def is_mujoco(self):
@@ -239,7 +280,7 @@ class MPCApp:
                 mj.mj_camlight(main_model, main_data)
 
                 # Plan
-                if self.synchronous_controller and (self.step_cnt % num_steps == 0 if num_steps > 1 else True):
+                if self.synchronous_controlling and (self.step_cnt % num_steps == 0 if num_steps > 1 else True):
                     self.plan()
 
                 # GUI visualizing
@@ -261,7 +302,7 @@ class MPCApp:
         while nt_viewer.is_running():
             with wp.ScopedTimer("step", active=False):
                 start_time = time.time()
-                if self.synchronous_controller:
+                if self.synchronous_controlling:
                     self.plan()
                 self.sim.step()
 
@@ -281,7 +322,7 @@ class MPCApp:
 
     def controller_spin(self):
         """Spin logic for the controller node."""
-        assert not self.synchronous_controller
+        assert not self.synchronous_controlling
         while True:
             start_time = time.time()
             self.plan()
@@ -345,15 +386,26 @@ class MPCApp:
         self.next_grasp = self.hand_opt.step_optimize(self.mj_data,
                                                       cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
                                                       cur_wrist_rot=cur_wrist_rot)
-        self.mj_robot_ctrl[self.hand_ctrl_ids] = self.next_grasp.joint_angles
-        mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
-                      pos=self.next_grasp.wrist_pos, quat=self.next_grasp.wrist_quat)
+        self.mj_robot_ctrl[self.hand_ctrl_ids] = self.next_grasp.joint_angles.cpu().numpy()
 
         # Arm plan
         next_grasp_pose = self.next_grasp.wrist_pose
-        q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=True)
-        if q is None:
-            q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=False)
+        if False:
+            # NOTE: EE Mocap is moved to [next_grasp_pose]'s hand-base here-in!
+            q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=True)
+            if q is None:
+                q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=False)
+        else:
+            mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
+                          pos=self.next_grasp.wrist_pos.cpu().numpy(), quat=self.next_grasp.wrist_quat.cpu().numpy())
+            self.fabrics_controller.step(new_palm_target=torch.as_tensor(next_grasp_pose),
+                                         # cur_robot_q=torch.as_tensor(
+                                         #    self.mj_data.qpos[self.robot_qpos_ids], device=self.device),
+                                         # cur_robot_qd=torch.as_tensor(
+                                         #    self.mj_data.qvel[self.robot_dof_ids], device=self.device),
+                                         cur_obj_poses={
+                                             self.object_data.obj_name: np.concat([self.obj.xpos, self.obj.xquat])})
+            q = self.fabrics_controller.q_prev.detach().cpu().numpy().squeeze()
         self.mj_robot_ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
 
         # Visualize

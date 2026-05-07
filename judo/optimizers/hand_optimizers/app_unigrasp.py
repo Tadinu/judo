@@ -1,4 +1,11 @@
 from typing import Callable, Optional
+
+# hydra
+import hydra
+from hydra.core.config_store import ConfigStore
+from omegaconf import DictConfig, OmegaConf
+
+# Torch
 import torch
 
 TORCH_DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -9,15 +16,22 @@ from xvfbwrapper import Xvfb
 
 # mjmanip
 from mjmanip.robot.arm_hand import ArmHandDiffIK
-from mjmanip.utils import mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene, mj_draw_spheres
+from mjmanip.utils import (mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene, mj_draw_spheres, \
+                           mj_get_mocap_pose)
+from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
+from mjmanip.control.fabrics.fabrics_controller import FabricsController
+from mjmanip.robot.panda_leap_fabrics import (ARM_XML_PATH as PANDA_LEAP_FABRICS_ARM_XML_PATH,
+                                              HAND_XML_PATH as PANDA_LEAP_FABRICS_HAND_XML_PATH, \
+                                              PandaLeapWithFabricsEnv, PandaLeapWithFabrics)
 
 # judo
-from judo import BackendType
+from judo import PACKAGE_ROOT, BackendType
 from judo.app.mpc_app import MPCApp
 from judo.tasks.panda_leap_pick import USE_LEAP_MJX
 
 if USE_LEAP_MJX:
     # NOTE: LeapMjx hand is more robust than Leap, so use [panda_leap_mjx] for now!
+    from mjmanip.robot.leap_mjx import LeapMjx
     from mjmanip.robot.panda_leap_mjx import PandaLeapMjxEnv, PandaLeapMjx, ARM_SCENE_XML_PATH, ARM_XML_PATH, \
         HAND_XML_PATH
 
@@ -34,31 +48,59 @@ RECORD_TIME = 300
 OBJ_NAME = PANDA_LEAP.OBJECT_NAMES[0]
 PANDA_LEAP.BASE_PLATFORM_NAME = "base_platform"
 
+FABRICS_CONFIGS_DIR = f"{PACKAGE_ROOT}/configs/fabrics"
+
+cs = ConfigStore.instance()
+cs.store(name="panda_leap_mujoco", node=ArmHandPoseFabricConfig)
+
+panda_leap_fabric_cfg_name = "panda_leap_mujoco"
+panda_leap_fabric_cfg = None
+
+
+@hydra.main(version_base=None, config_path=FABRICS_CONFIGS_DIR, config_name=panda_leap_fabric_cfg_name)
+def fetch_fabric_cfg(cfg: DictConfig) -> None:
+    global panda_leap_fabric_cfg
+    panda_leap_fabric_cfg = OmegaConf.to_object(cfg)
+    assert isinstance(panda_leap_fabric_cfg, ArmHandPoseFabricConfig)
+    # print(OmegaConf.to_yaml(panda_leap_fabric_cfg))
+
 
 class UniGraspApp(MPCApp):
     def __init__(self, task_name: str,
                  sim_backend_type: BackendType,
                  wp_kernel_set_joint_targets: Optional[Callable] = None,
+                 fabric_cfg: Optional[ArmHandPoseFabricConfig] = None,
                  headless: bool = False) -> None:
         super().__init__(task_name, optimizer_name="UniGrasp", sim_backend_type=sim_backend_type,
                          robot_class=PANDA_LEAP,
-                         wp_kernel_set_joint_targets=wp_kernel_set_joint_targets, headless=headless,
-                         kinematics_mode=False)
+                         wp_kernel_set_joint_targets=wp_kernel_set_joint_targets,
+                         fabric_cfg=fabric_cfg,
+                         kinematics_mode=False,
+                         headless=headless)
         """Initialize the simulation node."""
 
+    def config_fabrics(self):
+        self.fabrics_env_class = PandaLeapWithFabricsEnv
+        self.fabrics_robot_class = PandaLeapWithFabrics
+        self.fabrics_arm_xml = PANDA_LEAP_FABRICS_ARM_XML_PATH
+        self.fabrics_hand_xml = PANDA_LEAP_FABRICS_HAND_XML_PATH
+
     def plan(self) -> None:
-        """Updates the controls state internally."""
+        """Updates the control state internally."""
         if self.sim.paused:
             return
-        super().plan_arm_hand()
+        self.plan_arm_hand()
 
 
 def run_app(headless: bool) -> None:
-    app = UniGraspApp(task_name="panda_leap_pick", sim_backend_type=BackendType.MUJOCO, headless=headless)
+    app = UniGraspApp(task_name="panda_leap_pick", sim_backend_type=BackendType.MUJOCO,
+                      fabric_cfg=panda_leap_fabric_cfg,
+                      headless=headless)
     app.spin()
 
 
 if __name__ == "__main__":
+    fetch_fabric_cfg()
     app_headless = False
     if app_headless:
         with Xvfb(width=1920, height=1080) as xvfb:
