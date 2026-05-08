@@ -6,6 +6,7 @@ from omegaconf import DictConfig
 from loop_rate_limiters import RateLimiter
 
 import numpy as np
+import numpy.typing as npt
 import warp as wp
 
 import torch
@@ -232,6 +233,7 @@ class MPCApp:
 
     def init_ik_controllers(self):
         # DIFF-IK
+        # NOTE: MjData is created here-in if needed in robot's configuration
         self.diff_ik = ArmHandDiffIK(self.mj_model, self.mj_data, self.robot_class, self.qpos_home,
                                      ee_name=self.robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME),
                                      ee_obj_type='body')
@@ -241,12 +243,12 @@ class MPCApp:
         # FABRICS
         self.config_fabrics()
         if self.fabrics_env_class and self.fabrics_robot_class:
-            assert self.fabrics_arm_xml and self.fabrics_hand_xml, "Fabrics armh/hand XMLs are not set!"
+            assert self.fabrics_arm_xml and self.fabrics_hand_xml, "Fabrics arm/hand XMLs are not set!"
             self.fabrics_robot_class.BASE_POSES = self.robot_class.BASE_POSES
-            # NOTE: MjData is created here-in if needed in robot's configuration
             self.fabrics_env = self.fabrics_env_class(arm_hand_class=self.fabrics_robot_class,
                                                       arm_xml=self.fabrics_arm_xml,
                                                       hand_xml=self.fabrics_hand_xml,
+                                                      use_finger_fabrics=True,
                                                       fabric_cfg=self.fabric_cfg)
             self.fabrics_env.init()
             self.fabrics_robot = self.fabrics_env.robots_system
@@ -386,7 +388,6 @@ class MPCApp:
         self.next_grasp = self.hand_opt.step_optimize(self.mj_data,
                                                       cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
                                                       cur_wrist_rot=cur_wrist_rot)
-        self.mj_robot_ctrl[self.hand_ctrl_ids] = self.next_grasp.joint_angles.cpu().numpy()
 
         # Arm plan
         next_grasp_pose = self.next_grasp.wrist_pose
@@ -399,14 +400,15 @@ class MPCApp:
             mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
                           pos=self.next_grasp.wrist_pos.cpu().numpy(), quat=self.next_grasp.wrist_quat.cpu().numpy())
             self.fabrics_controller.step(new_palm_target=torch.as_tensor(next_grasp_pose),
-                                         # cur_robot_q=torch.as_tensor(
-                                         #    self.mj_data.qpos[self.robot_qpos_ids], device=self.device),
-                                         # cur_robot_qd=torch.as_tensor(
-                                         #    self.mj_data.qvel[self.robot_dof_ids], device=self.device),
+                                         new_finger_targets=self.hand_opt.hand_layer.fingertip_fabric_poses,
                                          cur_obj_poses={
                                              self.object_data.obj_name: np.concat([self.obj.xpos, self.obj.xquat])})
             q = self.fabrics_controller.q_prev.detach().cpu().numpy().squeeze()
         self.mj_robot_ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
+        if self.fabrics_controller.use_finger_fabrics:
+            self.mj_robot_ctrl[self.hand_ctrl_ids] = q[self.hand_qpos_ids]
+        else:
+            self.mj_robot_ctrl[self.hand_ctrl_ids] = self.next_grasp.joint_angles.cpu().numpy()
 
         # Visualize
         visualize_grasp = False
@@ -479,8 +481,7 @@ class MPCApp:
             pass
 
     @classmethod
-    def _draw_points(cls, mj_scene: mj.MjvScene, points: Union[np.ndarray, Sequence[float]], size: list[float],
-                     color: list[float]):
+    def _draw_points(cls, mj_scene: mj.MjvScene, points: npt.ArrayLike, size: list[float], color: list[float]):
         if isinstance(points, np.ndarray):
             assert len(points.shape) == 2
         npoints = len(points)
@@ -501,6 +502,11 @@ class MPCApp:
             if self.hand_opt.hand_visual_grasp_direction_site_pos is not None:
                 self._draw_points(mj_user_scn, self.hand_opt.hand_visual_grasp_direction_site_pos, size=[0.01],
                                   color=[1, 0, 1, 1])
+
+            # Fingertips
+            self._draw_points(mj_user_scn, [ftip_pose.detach().cpu().numpy()[:3] for _, ftip_pose in
+                                            self.hand_opt.hand_layer.fingertip_fabric_poses.items()], size=[0.01],
+                              color=[0.5, 0.5, 1, 1])
 
     def visualize_obj_pcl(self):
         if self.is_mujoco:

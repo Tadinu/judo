@@ -20,7 +20,7 @@ from judo import PACKAGE_ROOT
 from judo.hand_layers.leap_layer import LeapHandLayer, LeapAnchor
 
 # mjmanip
-from mjmanip.utils import IDENTITY_POSE, mj_step, mj_draw_pointcloud, mj_mat_to_pose
+from mjmanip.utils import IDENTITY_POSE, mj_step, mj_draw_pointcloud, mj_mat_to_pose, mj_get_site_pose
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.warp_utils import wp_transform_from_mj, wp_kernel_transform_mesh_points, wp_kernel_compute_vertex_normals
 from mjmanip.pytorch3d_utils import p3d_transform_points, mjw_geoms_to_pytorch3d_meshes
@@ -60,6 +60,7 @@ class MJLeapHandLayer(LeapHandLayer):
                          use_collision_mesh=use_collision_mesh, regen_cache=regen_cache,
                          visualized=visualized, device=device)
         assert hand_model_desc.endswith('.xml')
+        self.fingertip_fabric_poses: dict[str, torch.Tensor] = {}
 
     def init_kinematics(self):
         self.mj_spec, self.chain = pk.build_chain_from_mjcf(self.hand_model_desc, device=self.device)
@@ -71,7 +72,7 @@ class MJLeapHandLayer(LeapHandLayer):
             hand_base_spec.quat = self.hand_base_pose.squeeze()[3:]
         self.mj_model: mj.MjModel = self.mj_spec.compile()
         self.mj_data: mj.MjData = mj.MjData(self.mj_model)
-        self.mj_hand_base = self.mj_model.body(LEAP.HAND_BASE_NAME)
+        self.hand_base = self.mj_model.body(LEAP.HAND_BASE_NAME)
         self.hand_body_names = [self.mj_model.body(i).name for i in range(self.mj_model.nbody)]
         self.hand_body_names.remove('world')
 
@@ -278,11 +279,24 @@ class MJLeapHandLayer(LeapHandLayer):
     def step_forward(self, hand_base_pose: np.ndarray, hand_qpos: np.ndarray):
         # NOTE: NOT Differentiable, for reference only & benchmark with MJWarp or TorchWarpKinematics!
         hand_base_pose = hand_base_pose.squeeze()
-        self.mj_hand_base.pos[:] = hand_base_pose[:3]
-        self.mj_hand_base.quat[:] = hand_base_pose[3:]
+        self.hand_base.pos[:] = hand_base_pose[:3]
+        self.hand_base.quat[:] = hand_base_pose[3:]
         self.mj_data.qpos[:] = hand_qpos.squeeze()
         mj.mj_fwdKinematics(self.mj_model, self.mj_data)
         mj.mj_fwdPosition(self.mj_model, self.mj_data)
+
+        # Refer to [PANDA_LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES]
+        hand_fabric_model_name = "leap_rh_mjx_fabric"
+        self.fingertip_fabric_poses = {
+            f'{hand_fabric_model_name}/if_ds_fabric2': torch.as_tensor(
+                mj_get_site_pose(self.mj_data, 'if_tip', as_single_array=True), device=self.device),
+            f'{hand_fabric_model_name}/mf_ds_fabric2': torch.as_tensor(
+                mj_get_site_pose(self.mj_data, 'mf_tip', as_single_array=True), device=self.device),
+            f'{hand_fabric_model_name}/rf_ds_fabric2': torch.as_tensor(
+                mj_get_site_pose(self.mj_data, 'rf_tip', as_single_array=True), device=self.device),
+            f'{hand_fabric_model_name}/th_ds_fabric2': torch.as_tensor(
+                mj_get_site_pose(self.mj_data, 'th_tip', as_single_array=True), device=self.device)
+        }
 
     def step_forward_diff(self, hand_base_pose: torch.Tensor, hand_qpos: torch.Tensor) -> torch.Tensor:
         # Calculate the link transforms and their origin Jacobians.

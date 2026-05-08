@@ -149,7 +149,7 @@ class LeapHandLayer(torch.nn.Module):
             self.mj_spec.meshdir = LEAP_ASSETS_DIR
             self.mj_model: mj.MjModel = self.mj_spec.compile()
             self.mj_data: mj.MjData = mj.MjData(self.mj_model)
-            self.mj_hand_base = self.mj_model.body(LEAP.HAND_BASE_NAME)
+            self.hand_base = self.mj_model.body(LEAP.HAND_BASE_NAME)
             self.hand_body_names = [self.mj_model.body(i).name for i in range(self.mj_model.nbody)]
             self.hand_body_names.remove('world')
 

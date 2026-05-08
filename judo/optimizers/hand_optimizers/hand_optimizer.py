@@ -608,6 +608,9 @@ class HandOptimizer(torch.nn.Module):
         self.hand_visual_verts = o3d_vox_downsample(pred_vertices.squeeze().detach().cpu().numpy())
         self.hand_visual_vert_normals = o3d_vox_downsample(pred_normals.squeeze().detach().cpu().numpy())
 
+        self.hand_layer.step_forward(torch.cat([next_wrist_pos, next_wrist_quat_wxyz], dim=-1).detach().cpu().numpy(),
+                                     joint_angles.detach().cpu().numpy())
+
         # 2.1- Hand anchors of [pred_vertices/pred_normals] of hand at [next_wrist_pose]
         self.hand_anchors = self.hand_anchor_layer(pred_vertices)
         self.hand_anchors_normals = self.hand_anchor_layer(pred_normals)
