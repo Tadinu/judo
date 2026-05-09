@@ -1,6 +1,6 @@
 from __future__ import annotations
 import os
-from typing import Optional, Union
+from typing import Any, Optional, Union
 from dataclasses import dataclass
 import trimesh
 import numpy as np
@@ -8,11 +8,12 @@ import point_cloud_utils as pcu
 from mesh_to_sdf import get_surface_point_cloud
 from scipy.spatial import KDTree
 import torch
+import roma
 
 import mujoco as mj
 
 # mjmanip
-from mjmanip.utils import IDENTITY_POSE, mj_model_name, mj_pose_to_mat
+from mjmanip.utils import IDENTITY_POSE, mj_model_name, mj_pose_to_mat4x4
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.pytorch3d_utils import p3d_transform_points
 
@@ -29,6 +30,15 @@ class ObjectData:
     geom_mesh_paths: Optional[dict[str, str]] = None
     scale: float = 1.0
     npoints_each_geom: int = 1000
+    device: Union[torch.device, str] = 'cuda'
+
+    def get_object_pose(self, mj_data: mj.MjData) -> torch.Tensor:
+        obj = mj_data.body(self.obj_name)
+        obj_pose = torch.eye(4)
+        obj_pose[:3, 3] = torch.tensor(obj.xpos, dtype=torch.float32, device=self.device)
+        obj_pose[:3, :3] = roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(
+            torch.tensor(obj.xquat, dtype=torch.float32, device=self.device)))
+        return obj_pose
 
     @classmethod
     def get_geoms_data(cls, obj_name: str, geom_mesh_paths: dict[str, str], voxel_size=0.006, scale=1.0, vis=False,
@@ -58,7 +68,8 @@ class ObjectData:
                           geom_meshes=geom_meshes,  # scaled mesh
                           geom_tfs=geom_tfs,
                           scale=scale,
-                          npoints_each_geom=npoints_each_geom)
+                          npoints_each_geom=npoints_each_geom,
+                          device=device)
 
     @classmethod
     def get_mj_object_data(cls, obj_name: str, mj_model: Union[mj.MjModel, str], mj_data: Optional[mj.MjData] = None,
@@ -99,8 +110,9 @@ class ObjectData:
             geom_meshes = {model_name: trimesh.util.concatenate(geom_meshes.values())}
             base_body = mj_model.body(body_names[0])
             base_body_data = mj_data.body(body_names[0]) if mj_data else None
-            geom_tfs[model_name] = mj_pose_to_mat(np.concat([base_body_data.xpos, base_body_data.xquat]) \
-                                                      if base_body_data else np.concat([base_body.pos, base_body.quat]))
+            geom_tfs[model_name] = mj_pose_to_mat4x4(np.concat([base_body_data.xpos, base_body_data.xquat]) \
+                                                         if base_body_data else np.concat(
+                [base_body.pos, base_body.quat]))
 
         # Sample meshes' points
         geom_points = {}
@@ -145,29 +157,30 @@ class ObjectData:
                           geom_mesh_paths=geom_mesh_paths,
                           geom_meshes=geom_meshes,  # already scaled meshes
                           geom_tfs=geom_tfs,
-                          scale=scale)
+                          scale=scale,
+                          device=device)
 
-    def _all_pts(self, mj_data: mj.MjData, pts: dict[str, torch.Tensor],
-                 orientation_only: bool = False) -> torch.Tensor:
+    @classmethod
+    def _globalize_pts(cls, mj_data: mj.MjData, pts: dict[str, torch.Tensor],
+                       orientation_only: bool = False) -> torch.Tensor:
         all_pts = []
         for geom_name, geom_pt in pts.items():
             geom_data = mj_data.geom(geom_name)
-            device = geom_pt.device
             geom_pos = np.zeros(3, dtype=np.float32) if orientation_only else np.array(geom_data.xpos)
-            geom_quat = np.zeros(4)
-            mj.mju_mat2Quat(geom_quat, geom_data.xmat)
-            geom_pose = np.concat([geom_pos, geom_quat])
-            all_pts.append(
-                p3d_transform_points(geom_pt, torch.from_numpy(mj_pose_to_mat(geom_pose)).float().to(device)))
-        return torch.cat(all_pts).float()
+            geom_mat = np.eye(4)
+            geom_mat[:3, 3] = geom_pos
+            geom_mat[:3, :3] = geom_data.xmat.reshape(3, 3)
+            all_pts.append(p3d_transform_points(geom_pt, torch.from_numpy(geom_mat).float().to(geom_pt.device)))
+        return torch.cat(all_pts)
 
     @property
     def all_points(self) -> Optional[torch.Tensor]:
-        return self.all_geom_points
+        return self.all_geom_points if self.all_geom_points is not None else torch.cat(list(self.geom_points.values()))
 
     @property
     def all_normals(self) -> Optional[torch.Tensor]:
-        return self.all_geom_normals
+        return self.all_geom_normals if self.all_geom_normals is not None else (
+            torch.cat(list(self.geom_normals.values())))
 
     def transform_to(self, new_geom_poses: dict[str, np.ndarray], resample: bool = False):
         assert new_geom_poses.keys() == self.geom_meshes.keys()
@@ -181,7 +194,7 @@ class ObjectData:
 
             # New geom pose
             new_geom_pose = new_geom_poses[geom_name]
-            new_geom_tf = mj_pose_to_mat(new_geom_pose)
+            new_geom_tf = mj_pose_to_mat4x4(new_geom_pose)
             new_geom_tfs[geom_name] = new_geom_tf
 
             # Apply [new_pose] to mesh in place
@@ -204,8 +217,8 @@ class ObjectData:
         self.geom_tfs = new_geom_tfs
 
     def step(self, mj_data: mj.MjData):
-        self.all_geom_points = self._all_pts(mj_data, self.geom_points)
-        self.all_geom_normals = self._all_pts(mj_data, self.geom_normals, orientation_only=True)
+        self.all_geom_points = self._globalize_pts(mj_data, self.geom_points)
+        self.all_geom_normals = self._globalize_pts(mj_data, self.geom_normals, orientation_only=True)
 
     def visualize(self, mj_data: mj.MjData):
         trimesh.Scene(self.geom_meshes).show()

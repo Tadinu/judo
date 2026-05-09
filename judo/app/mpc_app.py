@@ -24,7 +24,7 @@ from mujoco import viewer
 from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
 from mjmanip.utils import (mj_body_geoms_data, mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap,
-                           mj_clear_scene, mj_draw_spheres, mj_get_mocap_pose)
+                           mj_clear_scene, mj_draw_spheres, mj_get_mocap_pose, mj_get_geoms_global_poses)
 from mjmanip.robot.arm_hand_fabrics import ArmHandWithFabricsEnv
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
@@ -41,6 +41,7 @@ from judo.app.utils import get_class_from_string
 
 # hand optimizer
 from judo.optimizers.hand_optimizers.hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams, HandGrasp
+from judo.optimizers.hand_optimizers.rot6d import robust_compute_rotation_matrix_from_ortho6d
 from judo.optimizers.hand_optimizers.object_utils import ObjectData
 from judo.app.utils import set_seed
 
@@ -207,6 +208,7 @@ class MPCApp:
                                                       joint_limit_lower=-np.pi / 6,
                                                       joint_limit_upper=np.pi / 6)
                 self.hand_base = self.mj_data.body(robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME))
+                # Object-centric (VS hand-base centric) grasp initialization
                 hand_params = HandParams(hand_model_name=self.robot_class.HAND_MODEL_NAME,
                                          xml_path=self.robot_class.HAND_XML_PATH,
                                          joint_angles=torch.from_numpy(np.array(self.mj_data.qpos[self.hand_qpos_ids],
@@ -216,17 +218,18 @@ class MPCApp:
                                         xml_path=self.robot_class.HAND_XML_PATH,
                                         joint_angles=np.array(self.mj_data.qpos[self.hand_qpos_ids], dtype=np.float32),
                                         hand_pos=self.hand_base.xpos.copy(),
-                                        hand_quat=self.hand_base.xquat.copy())
-                self.hand_opt = HandOptimizer(
-                    hand_params=hand_params,
-                    object_data=self.object_data,
-                    obstacles_data=[self.base_platform_data] +
-                                   [self.obj_obstacle_data] if self.obj_obstacle_data else [],
-                    opt_params=self.opt_params,
-                    apply_force_closure=True,
-                    to_mano_frame=False,
-                    device=self.device)
+                                        hand_quat_wxyz=self.hand_base.xquat.copy())
+                self.hand_opt = HandOptimizer(mj_data=self.mj_data,
+                                              hand_params=hand_params,
+                                              object_data=self.object_data,
+                                              obstacles_data=[self.base_platform_data] +
+                                                             [self.obj_obstacle_data] if self.obj_obstacle_data else [],
+                                              opt_params=self.opt_params,
+                                              apply_force_closure=True,
+                                              to_mano_frame=False,
+                                              device=self.device)
                 self.next_grasp: HandGrasp = None
+                self.is_last_plan_by_mpc: bool = False
 
     def config_fabrics(self):
         pass
@@ -341,19 +344,35 @@ class MPCApp:
         # start = time.perf_counter()
         # Rollout controller here-in!
         if self.sim.task.should_stop_mpc():
+            # Update [hand_opt]'s opt-wrist-pose to hand-base
+            if self.is_mujoco and self.is_last_plan_by_mpc:
+                assert self.hand_opt.use_quat, "Only quat-based grasp is supported!"
+                USE_HAND_BASE_CENTRIC_GRASP = False
+                if USE_HAND_BASE_CENTRIC_GRASP:
+                    grasp_pos = torch.from_numpy(self.hand_base.xpos).unsqueeze(0).float().to(self.device)
+                    grasp_quat_wxyz = torch.from_numpy(self.hand_base.xquat).unsqueeze(0).float().to(self.device)
+                else:
+                    if self.hand_opt.perfect_relative_grasp is not None:
+                        print("REUSE PERFECT GRASP AS INIT", self.hand_opt.cur_loss)
+                        perfect_wrist_pose = (self.object_data.get_object_pose(self.mj_data) @
+                                              self.hand_opt.perfect_relative_grasp)
+                        grasp_pos = perfect_wrist_pose[:3, 3]
+                        grasp_quat_wxyz = roma.quat_xyzw_to_wxyz(roma.rotmat_to_unitquat(perfect_wrist_pose[:3, :3]))
+                    else:
+                        print("RECALCULATE INIT GRASP", self.hand_opt.cur_loss)
+                        new_initial_grasp = self.hand_opt.recalculate_initial_grasp()
+                        grasp_pos = torch.as_tensor(new_initial_grasp.base_pos).float().to(self.device)
+                        grasp_quat_wxyz = torch.as_tensor(new_initial_grasp.base_quat_wxyz).float().to(self.device)
+                mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
+                              pos=grasp_pos.cpu().numpy(), quat=grasp_quat_wxyz.cpu().numpy())
+                assert self.hand_opt.use_quat
+                self.hand_opt.update_opt_wrist_pose(wrist_pos=grasp_pos, wrist_rot_wxyz=grasp_quat_wxyz)
             self.plan_arm_hand()
-        else:
-            if self.mpcontroller:
-                self.write_state_to_controller()
-                self.mpcontroller.update_action()
-                if self.is_mujoco:
-                    mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
-                                  pos=self.hand_base.xpos, quat=self.hand_base.xquat)
-                    if self.hand_opt:
-                        self.hand_opt.update_opt_wrist_pose(wrist_pos=torch.from_numpy(self.hand_base.xpos).unsqueeze(0)
-                                                            .float().to(self.device),
-                                                            wrist_rot=torch.from_numpy(self.hand_base.xquat)
-                                                            .unsqueeze(0).float().to(self.device))
+            self.is_last_plan_by_mpc = False
+        elif self.mpcontroller:
+            self.write_state_to_controller()
+            self.mpcontroller.update_action()
+            self.is_last_plan_by_mpc = True
         # end = time.perf_counter()
 
         # print("plan_time", end - start)
@@ -378,19 +397,21 @@ class MPCApp:
 
     def plan_arm_hand(self):
         # Hand plan
-        hand_batches_num = self.hand_opt.nbatches
-        assert hand_batches_num == 1
-        cur_hand_pos = self.hand_base.xpos.copy()
-        cur_hand_quat = self.hand_base.xquat.copy()
-        cur_wrist_rot = torch.tensor(cur_hand_quat).repeat(hand_batches_num, 1) if self.hand_opt.use_quat \
-            else (roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(torch.tensor(cur_hand_quat)))
-                  .repeat(hand_batches_num, 1, 1))
-        self.next_grasp = self.hand_opt.step_optimize(self.mj_data,
-                                                      cur_wrist_pos=np.tile(cur_hand_pos, (hand_batches_num, 1)),
-                                                      cur_wrist_rot=cur_wrist_rot)
+        # if self.hand_opt.cur_loss > 1000:
+        if True:
+            hand_batches_num = self.hand_opt.nbatches
+            assert hand_batches_num == 1
+            cur_hand_pos = (torch.tensor(self.hand_base.xpos, dtype=torch.float32, device=self.device)
+                            .repeat(hand_batches_num, 1))
+            cur_hand_quat = (torch.tensor(self.hand_base.xquat, dtype=torch.float32, device=self.device)
+                             .repeat(hand_batches_num, 1))
+            cur_wrist_rot = cur_hand_quat if self.hand_opt.use_quat \
+                else roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(cur_hand_quat))
+            self.next_grasp = self.hand_opt.step_optimize(cur_wrist_pos=cur_hand_pos,
+                                                          cur_wrist_rot=cur_wrist_rot)
 
         # Arm plan
-        next_grasp_pose = self.next_grasp.wrist_pose
+        next_grasp_pose = self.next_grasp.base_pose_wxyz
         if False:
             # NOTE: EE Mocap is moved to [next_grasp_pose]'s hand-base here-in!
             q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=True)
@@ -398,7 +419,8 @@ class MPCApp:
                 q = self.diff_ik.plan(target_ee_pose=next_grasp_pose, use_solver=False)
         else:
             mj_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
-                          pos=self.next_grasp.wrist_pos.cpu().numpy(), quat=self.next_grasp.wrist_quat.cpu().numpy())
+                          pos=self.next_grasp.base_pos.cpu().numpy(),
+                          quat=self.next_grasp.base_quat_wxyz.cpu().numpy())
             self.fabrics_controller.step(new_palm_target=torch.as_tensor(next_grasp_pose),
                                          new_finger_targets=self.hand_opt.hand_layer.fingertip_fabric_poses,
                                          cur_obj_poses={
@@ -413,7 +435,7 @@ class MPCApp:
         # Visualize
         visualize_grasp = False
         if visualize_grasp:
-            self.hand_opt.visualize_grasp(self.next_grasp, self.object_data.meshes)
+            self.hand_opt.visualize_grasp(self.next_grasp, self.object_data.geom_meshes)
 
         # Traces
         # Hand pcl
@@ -516,8 +538,15 @@ class MPCApp:
                             sizes=len(obj_points) * [[0.005]],
                             rgbas=len(obj_points) * [[0, 1, 0, 1]])
 
+            if True:
+                object_dense_pcl = self.hand_opt.object_global_dense_pcl.tolist()
+                mj_draw_spheres(self.sim.mj_viewer.user_scn,
+                                positions=object_dense_pcl,
+                                sizes=len(object_dense_pcl) * [[0.005]],
+                                rgbas=len(object_dense_pcl) * [[1, 0, 0, 1]])
+
             if False:
-                obj_obst_points = np.concat(
+                obj_obstacle_pts = np.concat(
                     [obst.all_points.detach().cpu().numpy() for obst in self.hand_opt.obstacles_data]).tolist()
                 mj_draw_spheres(self.sim.mj_viewer.user_scn,
                                 positions=obj_obst_points,

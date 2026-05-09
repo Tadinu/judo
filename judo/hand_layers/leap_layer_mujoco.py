@@ -20,7 +20,7 @@ from judo import PACKAGE_ROOT
 from judo.hand_layers.leap_layer import LeapHandLayer, LeapAnchor
 
 # mjmanip
-from mjmanip.utils import IDENTITY_POSE, mj_step, mj_draw_pointcloud, mj_mat_to_pose, mj_get_site_pose
+from mjmanip.utils import IDENTITY_POSE, mj_step, mj_draw_pointcloud, mj_mat4x4_to_pose, mj_get_site_pose
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.warp_utils import wp_transform_from_mj, wp_kernel_transform_mesh_points, wp_kernel_compute_vertex_normals
 from mjmanip.pytorch3d_utils import p3d_transform_points, mjw_geoms_to_pytorch3d_meshes
@@ -85,7 +85,7 @@ class MJLeapHandLayer(LeapHandLayer):
                                                              thread_across_links=False,
                                                              device=self.device,
                                                              robot_base_transform=wp_transform_from_mj(
-                                                                 self.hand_params.wrist_pose.squeeze()),
+                                                                 self.hand_params.base_pose_wxyz.squeeze()),
                                                              frame_names=self.hand_body_names)
 
             self.torch_warp_link_idxs = torch.tensor(
@@ -182,7 +182,7 @@ class MJLeapHandLayer(LeapHandLayer):
         wp_meshes_points, wp_meshes_normals = self.create_mesh_verts_normals(self.hand_surface_points, to_wp=True)
         for geom_name, geom_surface_points in self.hand_surface_points.items():
             mj_body = self.mj_data.body(self.mj_model.geom(geom_name).bodyid[0])
-            geom_local_pose = mj_mat_to_pose(self.ori_hand_meshes[geom_name][2])
+            geom_local_pose = mj_mat4x4_to_pose(self.ori_hand_meshes[geom_name][2])
 
             wp.launch(kernel=wp_kernel_transform_mesh_points,
                       dim=len(wp_meshes_points[geom_name]),
@@ -276,7 +276,7 @@ class MJLeapHandLayer(LeapHandLayer):
 
         return hand_composite_points, hand_surface_points, trimesh.util.concatenate(hand_meshes)
 
-    def step_forward(self, hand_base_pose: np.ndarray, hand_qpos: np.ndarray):
+    def step_mujoco_forward(self, hand_base_pose: np.ndarray, hand_qpos: np.ndarray):
         # NOTE: NOT Differentiable, for reference only & benchmark with MJWarp or TorchWarpKinematics!
         hand_base_pose = hand_base_pose.squeeze()
         self.hand_base.pos[:] = hand_base_pose[:3]

@@ -4,7 +4,6 @@ import torch
 import numpy as np
 import glob
 import roma
-import trimesh
 
 from judo import MODEL_PATH
 from judo.tasks.panda_leap_pick import USE_LEAP_MJX
@@ -24,6 +23,7 @@ PANDA_LEAP.NINSTANCES = 1
 # hand optimizer
 from hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams
 from object_utils import ObjectData
+from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
 
 BATCHES_NUM = 1
 
@@ -62,9 +62,14 @@ if __name__ == "__main__":
 
     for obj_filepath in filepath_list:
         obj_name = Path(obj_filepath).stem
+        obj_geom_names = []  # ['mug_handle0', 'mug_handle1', 'mug_handle2', 'mug_handle3']
         obj_data = ObjectData.get_geoms_data(obj_name, {obj_name: obj_filepath}, device=device) \
             if obj_filepath.endswith('.obj') else (
             ObjectData.get_mj_object_data(obj_name, obj_filepath, body_names=['mug'] if use_mug else None,
+                                          geom_names=obj_geom_names,
+                                          meshdir=str(os.path.join(MJMANIP_OBJECT_MODELS_DIR, obj_name)),
+                                          is_collision=bool(obj_geom_names),
+                                          merging_meshes=False,
                                           device=device))
         # obj_data.visualize()
         # obj_name = obj_filepath.split('/')[-1].split('.')[0]
@@ -73,7 +78,7 @@ if __name__ == "__main__":
                                                             joint_angles=np.zeros(PANDA_LEAP.HAND_DOFS_NO,
                                                                                   dtype=np.float32),
                                                             hand_pos=np.zeros(3),
-                                                            hand_quat=np.array([0.71, 0.71, 0, 0]),
+                                                            hand_quat_wxyz=np.array([0.71, 0.71, 0, 0]),
                                                             nbatches=BATCHES_NUM),
                                  object_data=obj_data,
                                  opt_params=opt_params,
@@ -86,11 +91,11 @@ if __name__ == "__main__":
         if False:
             new_wrist_rot = torch.tensor([0.71, 0.71, 0, 0]).repeat(BATCHES_NUM, 1) if hand_opt.use_quat \
                 else roma.unitquat_to_rotmat(torch.tensor([0.71, 0.71, 0, 0])).repeat(BATCHES_NUM, 1, 1)
-            grasp = hand_opt.step_optimize(mj_data=None, cur_wrist_pos=np.tile([0, 0, 0.1], (BATCHES_NUM, 1)),
+            grasp = hand_opt.step_optimize(cur_wrist_pos=torch.tensor([0, 0, 0.1]).repeat(BATCHES_NUM, 1),
                                            cur_wrist_rot=new_wrist_rot,
                                            substeps_num=200)
 
         # Visualize
         vis_grasp = True
         if vis_grasp:
-            hand_opt.visualize_grasp(grasp, object_data.meshes)
+            hand_opt.visualize_grasp(grasp, obj_data.geom_meshes)

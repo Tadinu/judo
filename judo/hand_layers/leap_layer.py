@@ -65,7 +65,7 @@ class LeapHandLayer(torch.nn.Module):
         if hand_base_pose is not None:
             assert hand_base_pose.shape[0] == batch_size
             self.mj_init_hand_base_pose = hand_base_pose
-            torch_hand_base_pose[:, :3, 3] = torch.from_numpy(hand_base_pose[:, 3]).float().to(device)
+            torch_hand_base_pose[:, :3, 3] = torch.tensor(hand_base_pose[:, 3], dtype=torch.float32, device=device)
             torch_hand_base_pose[:, :3, :3] = roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(
                 torch.from_numpy(hand_base_pose[:, 3:]).float().to(device)))
         self.hand_base_pose = torch_hand_base_pose
@@ -183,7 +183,7 @@ class LeapHandLayer(torch.nn.Module):
         To create needed assets for the first running.
         Should run before first use.
         '''
-        pose = self.hand_base_pose
+        hand_base_pose = self.hand_base_pose
         hand_qpos = self.joint_angles
 
         show_mesh = self.show_mesh
@@ -193,7 +193,7 @@ class LeapHandLayer(torch.nn.Module):
         self.meshes_data = self.load_meshes()
         self.save_geom_convex_meshes(self.geom_convex_meshes)
 
-        hand_meshes = self.get_forward_hand_mesh(pose, hand_qpos)[0]
+        hand_meshes = self.get_forward_hand_mesh(hand_base_pose, hand_qpos)[0]
         hand_parts = hand_meshes.split()
 
         hand_single_mesh = trimesh.boolean.boolean_manifold(hand_parts, 'union') if self.is_from_urdf else \
@@ -203,7 +203,7 @@ class LeapHandLayer(torch.nn.Module):
         self.show_mesh = True
         self.make_contact_points = False
         self.meshes_data = self.load_meshes()
-        hand_all_zero_mesh = self.get_forward_hand_mesh(pose, hand_qpos)[0]
+        hand_all_zero_mesh = self.get_forward_hand_mesh(hand_base_pose, hand_qpos)[0]
         hand_all_zero_mesh.export(f'{LEAP_LAYER_CACHE_DIR}/hand_all_zero.obj')
 
         self.show_mesh = False
@@ -211,13 +211,13 @@ class LeapHandLayer(torch.nn.Module):
         self.meshes_data = self.load_meshes()
         self.save_surface_points(self.hand_surface_points)
 
-        self.get_forward_vertices(pose, hand_qpos)  # Sample [hand_composite_points]
+        self.get_forward_vertices(hand_base_pose, hand_qpos)  # Sample [hand_composite_points]
         self.visible_point_indices = self.sample_visible_points(hand_single_mesh, self.hand_composite_points,
                                                                 down_sampling=False)
         self.show_mesh = True
         self.make_contact_points = False
         self.meshes_data = self.load_meshes()
-        hand_to_mano_mesh = self.get_forward_hand_mesh(pose, hand_qpos)[0]
+        hand_to_mano_mesh = self.get_forward_hand_mesh(hand_base_pose, hand_qpos)[0]
         hand_to_mano_mesh.export(f'{LEAP_LAYER_CACHE_DIR}/hand_to_mano_frame.obj')
 
         self.make_contact_points = False
