@@ -15,7 +15,7 @@ from judo.simulation.base import Simulation
 from judo.utils.video import VideoRecorder
 
 # mjmanip
-from mjmanip.mj_utils import mj_clear_scene, mj_draw_spheres, mj_draw_text
+from mjmanip.mj_utils import mj_scene_clear, mj_scene_draw_spheres, mj_scene_draw_text
 
 
 class MJSimulation(Simulation):
@@ -94,7 +94,7 @@ class MJSimulation(Simulation):
 
     def step(self) -> None:
         """Step the simulation forward by one timestep."""
-        if self.nominal_control_spline is not None and not self.paused:
+        if not (self.paused or self.task.should_stop_mpc() or self.nominal_control_spline is None):
             try:
                 nominal_ctrl = self.nominal_control_spline(self.task.mj_data.time)
                 if self.task.map_controls:
@@ -115,14 +115,14 @@ class MJSimulation(Simulation):
             self.visualize_traces(self.mj_viewer.user_scn)
 
     def visualize_traces(self, scene):
-        mj_clear_scene(scene)
+        mj_scene_clear(scene)
         # Nominal fabrics agent (the sim one, not rollout)'s sampled EE targets
         traces = self.fabrics_agent.optimal_target_traces if self.fabrics_agent \
             else self.task.optimal_target_traces
         if traces:
-            mj_draw_spheres(scene, traces, [0.01] * len(traces))
+            mj_scene_draw_spheres(scene, traces, [0.01] * len(traces))
         if hasattr(self.task, "cur_phase"):
-            mj_draw_text(scene, self.task.cur_phase.name)
+            mj_scene_draw_text(scene, self.task.cur_phase.name)
 
     @property
     def sim_state(self) -> Union[MujocoState, np.ndarray]:

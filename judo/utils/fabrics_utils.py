@@ -18,7 +18,7 @@ from mjmanip import DEFAULT_SCENE_XML_PATH, MJMANIP_DEVICE
 from mjmanip.robot.world_base import WorldBase
 from mjmanip.robot.leap_mjx import LeapMjx
 from mjmanip.robot.leap_fabrics import LeapWithFabrics, LeapWithFabricsEnv, HAND_XML_PATH
-from mjmanip.mj_utils import mj_get_joints_qids, mj_get_site_pose
+from mjmanip.mj_utils import mj_model_joints_qids, mj_data_site_pose
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.robot.leap_fabrics import LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \
@@ -142,7 +142,7 @@ class FabricsAgent:
             self.finger_target_poses = {finger_ee_name: torch.clone(finger_target) for finger_ee_name, finger_target in
                                         self.fabrics_controller.finger_targets.items()}
         elif self.USE_FINGER_EE_SINGLE_TASK_SPACE:
-            self.common_finger_ee_target = mj_get_site_pose(self.mj_data, self.FINGER_EES_TARGET_SITE, True)
+            self.common_finger_ee_target = mj_data_site_pose(self.mj_data, self.FINGER_EES_TARGET_SITE, True)
             self.finger_target_poses = {finger_ee_name: torch.zeros((self.num_rollout_worlds, 7),
                                                                     device=MJMANIP_DEVICE) for
                                         finger_ee_name in list(self.fabrics_controller.finger_targets.keys())}
@@ -173,9 +173,9 @@ class FabricsAgent:
         if self.USE_FINGER_EE_MULTI_TASK_SPACES:
             for finger_ee_name, finger_target_pose in self.finger_target_poses.items():
                 finger_target_pose.copy_(torch.as_tensor(
-                    mj_get_site_pose(self.mj_data, f"{finger_ee_name[:2]}_tip", True), device=MJMANIP_DEVICE))
+                    mj_data_site_pose(self.mj_data, f"{finger_ee_name[:2]}_tip", True), device=MJMANIP_DEVICE))
         elif self.USE_FINGER_EE_SINGLE_TASK_SPACE:
-            self.common_finger_ee_target = mj_get_site_pose(self.mj_data, self.FINGER_EES_TARGET_SITE, True)
+            self.common_finger_ee_target = mj_data_site_pose(self.mj_data, self.FINGER_EES_TARGET_SITE, True)
 
         # Update [fabrics_controller]'s q, qdd with [current_state]
         cur_robot_q = current_state[self.fabrics_world.robot_qpos_ids]

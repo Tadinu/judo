@@ -11,7 +11,8 @@ import mujoco as mj
 # mjmanip
 from mjmanip import DEFAULT_SCENE_MJX_XML_PATH, DEFAULT_SCENE_XML_PATH
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
-from mjmanip.mj_utils import IDENTITY_WXYZ, mj_body_free_joint_name, mj_get_site_pose, mj_get_mocap_pose, mj_move_mocap
+from mjmanip.mj_utils import (IDENTITY_POSE, IDENTITY_WXYZ, mj_body_free_joint_name, mj_data_site_pose,
+                              mj_data_mocap_pose, mj_data_move_mocap, mj_spec_add_body)
 
 # judo
 from judo.hand_layers.leap_layer import USE_LEAP_MJX
@@ -46,6 +47,13 @@ OBJ_NAME = PANDA_LEAP.OBJECT_NAMES[0]
 USE_EE_MPC = False
 EE_DOFS_NO = 6
 PANDA_LEAP.OBJECT_GRASP_TARGET_SITE_NAME = "mug_handle_center" if OBJ_NAME == 'mug' else OBJ_NAME
+PANDA_LEAP.OBJECT_INIT_POSES["mug"] = np.hstack([np.array([0, 0.5, 0.5]), IDENTITY_WXYZ])
+
+TABLE_NAME = "table"
+
+
+# PANDA_LEAP.ENV_BODY_NAMES += [TABLE_NAME]
+# PANDA_LEAP.ENV_COLLISION_GEOM_NAMES += [TABLE_NAME]
 
 
 @slider("w_pos", 0.0, 200.0)
@@ -148,6 +156,17 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             hand_xml=HAND_XML_PATH)
         spec = self.mj_robot_env.construct_main_spec(self.mj_robot_env.meshdir, self.mj_robot_env.texturedir)
         spec.option.timestep = 0.005
+
+        # Table
+        mj_spec_add_body(spec, TABLE_NAME,
+                         body_pose=[0, 0.5, 0.2, 1, 0, 0, 0],
+                         obj_geom_type=mj.mjtGeom.mjGEOM_BOX,
+                         obj_geom_size=[0.2, 0.2, 0.2],
+                         free_moving=False)
+        for arm_body in PANDA_LEAP.arm_items_full_names(PANDA_LEAP.ARM_BODIES_NAMES):
+            spec.add_exclude(bodyname1=arm_body, bodyname2=TABLE_NAME)
+        for hand_body in PANDA_LEAP.hand_items_full_names(PANDA_LEAP.HAND_BODIES_NAMES):
+            spec.add_exclude(bodyname1=hand_body, bodyname2=TABLE_NAME)
 
         # Object center sensor
         if OBJ_NAME == 'mug':
@@ -304,7 +323,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             return - reaching_cost - orientation_cost - grasp_cost - obj_vel_cost - hand_vel_cost - bring_cost
 
     def should_stop_mpc(self) -> bool:
-        return self.cur_phase == ObjectRelocatingPhase.GRASPING_OBJ  # and self.cur_phase_duration > 0.5
+        return self.mpc_disabled or self.cur_phase == ObjectRelocatingPhase.GRASPING_OBJ  # and self.cur_phase_duration > 0.5
 
     def reset(self) -> None:
         """Resets the model to a default state with random goal."""
@@ -331,16 +350,16 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
 
     def _draw_desired_grasp_direction(self) -> np.ndarray:
         if OBJ_NAME == 'mug':
-            mug_grasp_handle_center = mj_get_site_pose(self.mj_data, "mug_handle_center")[0]
-            mug_grasp_direction = mj_get_site_pose(self.mj_data, "mug_handle_grasp_direction")[
+            mug_grasp_handle_center = mj_data_site_pose(self.mj_data, "mug_handle_center")[0]
+            mug_grasp_direction = mj_data_site_pose(self.mj_data, "mug_handle_grasp_direction")[
                                       0] - mug_grasp_handle_center
             mug_grasp_direction_quat = np.zeros(4)
             mj.mju_quatZ2Vec(mug_grasp_direction_quat, mug_grasp_direction)
-            mj_move_mocap(self.mj_model, self.mj_data, self.mj_robot_env.main_class.EE_GUIDER_MOCAP_NAME,
-                          pos=mug_grasp_handle_center, quat=mug_grasp_direction_quat)
+            mj_data_move_mocap(self.mj_model, self.mj_data, self.mj_robot_env.main_class.EE_GUIDER_MOCAP_NAME,
+                               pos=mug_grasp_handle_center, quat=mug_grasp_direction_quat)
             return mj.mju_normalize3(mug_grasp_direction)
         else:
-            ee_guider_pose = mj_get_mocap_pose(self.mj_data, self.mj_robot_env.main_class.EE_GUIDER_MOCAP_NAME)
+            ee_guider_pose = mj_data_mocap_pose(self.mj_data, self.mj_robot_env.main_class.EE_GUIDER_MOCAP_NAME)
             ee_guider_direction = np.zeros(3)
             mj.mju_rotVecQuat(ee_guider_direction, np.array([0, 0, 1]), ee_guider_pose.quat)
             return ee_guider_direction
@@ -394,13 +413,14 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
                     ee_quat_ctrl = np.zeros(4)
                     mj.mju_euler2Quat(ee_quat_ctrl, ee_pose_ctrl[3:], "XYZ")
                     target_pose = np.zeros(7)
-                    grasp_site_pos, grasp_site_quat = mj_get_site_pose(mj_data, self.grasp_site_id)
+                    grasp_site_pos, grasp_site_quat = mj_data_site_pose(mj_data, self.grasp_site_id)
                     mj.mju_mulPose(target_pose[:3], target_pose[3:],
                                    grasp_site_pos, grasp_site_quat,
                                    ee_pose_ctrl[:3], ee_quat_ctrl)
-                    q = diff_ik.plan(target_ee_pose=target_pose, use_solver=True)
+                    target_ee_poses = {diff_ik.main_ee_name: target_pose}
+                    q = diff_ik.plan(target_ee_poses=target_ee_poses, use_solver=True)
                     if q is None:
-                        q = diff_ik.plan(target_ee_pose=target_pose, use_solver=False)
+                        q = diff_ik.plan(target_ee_poses=target_ee_poses, use_solver=False)
                     # Traces
                     if not model_data_pairs:
                         self.optimal_target_traces.append(target_pose[:3])

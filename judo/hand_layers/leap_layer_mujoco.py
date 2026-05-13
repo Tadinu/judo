@@ -20,7 +20,7 @@ from judo import PACKAGE_ROOT
 from judo.hand_layers.leap_layer import LeapHandLayer, LeapAnchor
 
 # mjmanip
-from mjmanip.mj_utils import IDENTITY_POSE, mj_step, mj_draw_pointcloud, mj_mat4x4_to_pose, mj_get_site_pose
+from mjmanip.mj_utils import IDENTITY_POSE, mj_step, mj_scene_draw_pointcloud, mj_mat4x4_to_pose, mj_data_site_pose
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.warp_utils import wp_transform_from_mj, wp_kernel_transform_mesh_points, wp_kernel_compute_vertex_normals
 from mjmanip.pytorch3d_utils import p3d_transform_points, mjw_geoms_to_pytorch3d_meshes
@@ -289,13 +289,13 @@ class MJLeapHandLayer(LeapHandLayer):
         hand_fabric_model_name = "leap_rh_mjx_fabric"
         self.fingertip_fabric_poses = {
             f'{hand_fabric_model_name}/if_ds_fabric2': torch.as_tensor(
-                mj_get_site_pose(self.mj_data, 'if_tip', as_single_array=True), device=self.device),
+                mj_data_site_pose(self.mj_data, 'if_tip', as_single_array=True), device=self.device),
             f'{hand_fabric_model_name}/mf_ds_fabric2': torch.as_tensor(
-                mj_get_site_pose(self.mj_data, 'mf_tip', as_single_array=True), device=self.device),
+                mj_data_site_pose(self.mj_data, 'mf_tip', as_single_array=True), device=self.device),
             f'{hand_fabric_model_name}/rf_ds_fabric2': torch.as_tensor(
-                mj_get_site_pose(self.mj_data, 'rf_tip', as_single_array=True), device=self.device),
+                mj_data_site_pose(self.mj_data, 'rf_tip', as_single_array=True), device=self.device),
             f'{hand_fabric_model_name}/th_ds_fabric2': torch.as_tensor(
-                mj_get_site_pose(self.mj_data, 'th_tip', as_single_array=True), device=self.device)
+                mj_data_site_pose(self.mj_data, 'th_tip', as_single_array=True), device=self.device)
         }
 
     def step_forward_diff(self, hand_base_pose: torch.Tensor, hand_qpos: torch.Tensor) -> torch.Tensor:
@@ -449,7 +449,7 @@ if __name__ == "__main__":
                 hand_base_pose=torch.tensor([math.sin(i) * 0.5, math.cos(i) * 0.5, 3, 1, 0, 0, 0],
                                             device=torch_device).unsqueeze(0).requires_grad_(True),
                 hand_qpos=torch.rand(1, LEAP.HAND_DOFS_NO, device=torch_device).requires_grad_(True))
-            mj_draw_pointcloud(mj_viewer.user_scn, verts.detach().cpu().numpy().squeeze())
+            mj_scene_draw_pointcloud(mj_viewer.user_scn, verts.detach().cpu().numpy().squeeze())
 
             if pick_anchor_points:
                 anchor_layer = LeapAnchor()

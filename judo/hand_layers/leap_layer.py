@@ -26,8 +26,8 @@ if TYPE_CHECKING:
     from ..optimizers.hand_optimizers.hand_optimizer import HandParams
 
 # mjmanip
-from mjmanip.mj_utils import mj_get_mesh_file_path
-from mjmanip.trimesh_utils import mj_geom_spec_to_trimesh
+from mjmanip.mj_utils import mj_spec_mesh_file_path
+from mjmanip.trimesh_utils import mj_spec_geom_to_trimesh
 
 USE_LEAP_MJX = True
 if USE_LEAP_MJX:
@@ -236,7 +236,7 @@ class LeapHandLayer(torch.nn.Module):
                     continue
 
                 # 1- Load [geom_mesh], saving it to [self.geom_meshes]
-                geom_mesh = mj_geom_spec_to_trimesh(self.mj_spec, geom_spec)
+                geom_mesh = mj_spec_geom_to_trimesh(self.mj_spec, geom_spec)
                 if not geom_mesh:
                     continue
                 geom_name = geom_spec.name

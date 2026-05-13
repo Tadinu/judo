@@ -16,9 +16,9 @@ from xvfbwrapper import Xvfb
 
 # mjmanip
 from mjmanip.robot.arm_hand import ArmHandDiffIK
-from mjmanip.mj_utils import (mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene,
-                              mj_draw_spheres, \
-                              mj_get_mocap_pose)
+from mjmanip.mj_utils import (mj_model_joints_qids, mj_model_actuators_id_list, mj_data_move_mocap, mj_scene_clear,
+                              mj_scene_draw_spheres, \
+                              mj_data_mocap_pose)
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.robot.panda_leap_fabrics import (ARM_XML_PATH as PANDA_LEAP_FABRICS_ARM_XML_PATH,
@@ -47,7 +47,6 @@ PANDA_LEAP.NINSTANCES = 1
 
 RECORD_TIME = 300
 OBJ_NAME = PANDA_LEAP.OBJECT_NAMES[0]
-PANDA_LEAP.BASE_PLATFORM_NAME = "base_platform"
 
 FABRICS_CONFIGS_DIR = f"{PACKAGE_ROOT}/configs/fabrics"
 
@@ -94,6 +93,7 @@ class UniGraspApp(MPCApp):
 
 
 def run_app(headless: bool) -> None:
+    # NOTE: ["panda_leap_pick"] -> Key to [PandaLeapPickConfig], of which [mj_compose_spec()] loads XML -> mj_model
     app = UniGraspApp(task_name="panda_leap_pick", sim_backend_type=BackendType.MUJOCO,
                       fabric_cfg=panda_leap_fabric_cfg,
                       headless=headless)

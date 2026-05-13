@@ -58,7 +58,6 @@ class PandaLeapPickApp(MPCApp):
                  fabric_cfg: Optional[ArmHandPoseFabricConfig] = None,
                  headless: bool = False) -> None:
         cfg = PandaLeapPickConfig()
-        cfg.robot_class.BASE_PLATFORM_NAME = "base_platform"
         super().__init__(task_name=cfg.task_name,
                          robot_class=cfg.robot_class,
                          optimizer_name=list(optimizer_registration_cfg.keys())[0],

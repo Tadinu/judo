@@ -44,7 +44,7 @@ else:
 
     hand_class = FreeLeap
     hand_class_env = LeapEnv
-from mjmanip.mj_utils import mj_get_joints_qids, mj_body_free_joint_name, mj_get_site_pose
+from mjmanip.mj_utils import mj_model_joints_qids, mj_body_free_joint_name, mj_data_site_pose
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.robot.leap_fabrics import LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \

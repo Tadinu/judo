@@ -75,6 +75,7 @@ class Task(ABC, Generic[ConfigT]):
         backend_type = self.config.sim_backend_type()
         self.num_rollout_worlds = num_rollout_worlds
         self.optimal_target_traces: list[np.ndarray] = []
+        self.mpc_disabled: bool = False
 
         # MuJoCo
         self.mj_robot_env: ArmHandEnv = None
@@ -297,7 +298,7 @@ class Task(ABC, Generic[ConfigT]):
         return limits  # type: ignore
 
     def should_stop_mpc(self) -> bool:
-        return False
+        return self.mpc_disabled
 
     def reset(self) -> None:
         """Reset behavior for task. Sets config + velocities to zeros."""
