@@ -38,7 +38,7 @@ else:
 from judo.hand_layers.leap_layer import LeapAnchor
 
 # mjmanip
-from mjmanip.utils import mj_get_geoms_global_poses
+from mjmanip.mj_utils import mj_get_geoms_global_poses
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.pytorch3d_utils import (p3d_transform_points, p3d_stable_angle_between_vectors,
                                      mjw_geoms_to_pytorch3d_meshes, p3d_to_trimesh)

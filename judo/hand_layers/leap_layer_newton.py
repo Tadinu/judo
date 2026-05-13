@@ -14,7 +14,7 @@ from judo import PACKAGE_ROOT
 from judo.hand_layers.leap_layer import LeapHandLayer
 
 # mjmanip
-from mjmanip.utils import IDENTITY_POSE, mj_get_geom_mesh_meta
+from mjmanip.mj_utils import IDENTITY_POSE, mj_get_geom_mesh_meta
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.pytorch3d_utils import mjw_geoms_to_pytorch3d_meshes
 from mjmanip.newton.newton_backend import NewtonBackend

@@ -16,8 +16,9 @@ from xvfbwrapper import Xvfb
 
 # mjmanip
 from mjmanip.robot.arm_hand import ArmHandDiffIK
-from mjmanip.utils import (mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene, mj_draw_spheres, \
-                           mj_get_mocap_pose)
+from mjmanip.mj_utils import (mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap, mj_clear_scene,
+                              mj_draw_spheres, \
+                              mj_get_mocap_pose)
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.robot.panda_leap_fabrics import (ARM_XML_PATH as PANDA_LEAP_FABRICS_ARM_XML_PATH,

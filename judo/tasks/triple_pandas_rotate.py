@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 # mjmanip
 from mjmanip import DEFAULT_SCENE_XML_PATH
 from mjmanip.robot.multi_panda_nohands import MultiPandaNoHandsEnv, MultiPandaNoHands, ARM_SCENE_XML_PATH, ARM_XML_PATH
-from mjmanip.utils import mj_get_joints_qids
+from mjmanip.mj_utils import mj_get_joints_qids
 
 # judo
 from judo import BackendType

@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from ..optimizers.hand_optimizers.hand_optimizer import HandParams
 
 # mjmanip
-from mjmanip.utils import mj_get_mesh_file_path
+from mjmanip.mj_utils import mj_get_mesh_file_path
 from mjmanip.trimesh_utils import mj_geom_spec_to_trimesh
 
 USE_LEAP_MJX = True

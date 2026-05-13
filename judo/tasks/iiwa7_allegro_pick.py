@@ -9,7 +9,7 @@ import mujoco as mj
 # mjmanip
 from mjmanip.robot.iiwa7_allegro_fabrics import IIWA7AllegroFabricsEnv, IIWA7AllegroBiotac, ARM_SCENE_XML_PATH, \
     ARM_XML_PATH, HAND_XML_PATH
-from mjmanip.utils import mj_body_free_joint_name
+from mjmanip.mj_utils import mj_body_free_joint_name
 
 # judo
 from judo import BackendType

@@ -13,7 +13,7 @@ import roma
 import mujoco as mj
 
 # mjmanip
-from mjmanip.utils import IDENTITY_POSE, mj_model_name, mj_pose_to_mat4x4
+from mjmanip.mj_utils import IDENTITY_POSE, mj_model_name, mj_pose_to_mat4x4
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.pytorch3d_utils import p3d_transform_points
 

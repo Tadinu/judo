@@ -23,8 +23,8 @@ from mujoco import viewer
 # mjmanip
 from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
-from mjmanip.utils import (mj_body_geoms_data, mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap,
-                           mj_clear_scene, mj_draw_spheres, mj_get_mocap_pose, mj_get_geoms_global_poses)
+from mjmanip.mj_utils import (mj_body_geoms_data, mj_get_joints_qids, mj_get_actuators_id_list, mj_move_mocap,
+                              mj_clear_scene, mj_draw_spheres, mj_get_mocap_pose, mj_get_geoms_global_poses)
 from mjmanip.robot.arm_hand_fabrics import ArmHandWithFabricsEnv
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig

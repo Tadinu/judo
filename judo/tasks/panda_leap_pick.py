@@ -11,7 +11,7 @@ import mujoco as mj
 # mjmanip
 from mjmanip import DEFAULT_SCENE_MJX_XML_PATH, DEFAULT_SCENE_XML_PATH
 from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
-from mjmanip.utils import IDENTITY_WXYZ, mj_body_free_joint_name, mj_get_site_pose, mj_get_mocap_pose, mj_move_mocap
+from mjmanip.mj_utils import IDENTITY_WXYZ, mj_body_free_joint_name, mj_get_site_pose, mj_get_mocap_pose, mj_move_mocap
 
 # judo
 from judo.hand_layers.leap_layer import USE_LEAP_MJX

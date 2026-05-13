@@ -15,7 +15,7 @@ from judo.simulation.base import Simulation
 from judo.utils.video import VideoRecorder
 
 # mjmanip
-from mjmanip.utils import mj_clear_scene, mj_draw_spheres, mj_draw_text
+from mjmanip.mj_utils import mj_clear_scene, mj_draw_spheres, mj_draw_text
 
 
 class MJSimulation(Simulation):
