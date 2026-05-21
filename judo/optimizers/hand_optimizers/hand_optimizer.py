@@ -194,7 +194,7 @@ class HandOptimizer(torch.nn.Module):
     """Custom Pytorch model for gradient-base grasp optimization.
     """
     LOSS_MIN_THRESHOLD: float = 600
-    USE_ADAMW: bool = False
+    USE_ADAMW: bool = True
 
     def float_torch_tensor(self, x: np.ndarray) -> torch.Tensor:
         return torch.from_numpy(x).to(device=self.device, dtype=torch.float32).repeat(self.nbatches, 1)
@@ -216,7 +216,7 @@ class HandOptimizer(torch.nn.Module):
         self.apply_force_closure = apply_force_closure
         self.cur_loss = self.LOSS_MIN_THRESHOLD + 1
         self.min_loss = 1e8
-        self.perfect_local_grasp: torch.Tensor = None  # The best grasp (relative to object)
+        self.perfect_relative_grasp: HandGrasp = None  # The best grasp (relative to object)
 
         # Object/Obstacle data
         assert object_data
@@ -532,7 +532,7 @@ class HandOptimizer(torch.nn.Module):
 
         return G
 
-    def decode_joint_angles(self, with_limit: bool = False) -> torch.Tensor:
+    def decode_opt_joint_angles(self, with_limit: bool = False) -> torch.Tensor:
         if with_limit:
             output = (self.joint_means + self.joint_ranges * self.opt_joint_angles) % (2 * np.pi)
             output = torch.where(output > np.pi, output - 2 * np.pi, output)
@@ -601,16 +601,19 @@ class HandOptimizer(torch.nn.Module):
 
             hand_grasp_direction = next_grasp_direction_site_pos - next_grasp_site_pos
             hand_object_direction = object_center - next_grasp_site_pos
-            total_grasp_loss = stable_angle(hand_grasp_direction, hand_object_direction, dim=-1)
+            total_grasp_loss = p3d_stable_angle_between_vectors(hand_grasp_direction, hand_object_direction, dim=-1)
 
         # print(total_grasp_loss)
         return total_grasp_loss
 
-    def update_opt_wrist_pose(self, wrist_pos: torch.Tensor, wrist_rot_wxyz: torch.Tensor):
+    def update_opt_params(self, wrist_pos: torch.Tensor, wrist_rot_wxyz: torch.Tensor,
+                          joint_angles: Optional[torch.Tensor] = None):
         with torch.no_grad():
             self.opt_wrist_pos.copy_(wrist_pos)
             self.opt_wrist_rot.copy_(wrist_rot_wxyz if self.use_quat else
                                      roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(wrist_rot_wxyz)))
+            if joint_angles is not None:
+                self.opt_joint_angles.copy_(joint_angles)
 
     def forward(self, obstacles: Optional[list[ObjectData]] = None):
         """
@@ -628,11 +631,11 @@ class HandOptimizer(torch.nn.Module):
         next_wrist_pose[:, :3, :3] = roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(next_wrist_quat_wxyz)) \
             if self.use_quat else robust_compute_rotation_matrix_from_ortho6d(self.opt_wrist_rot)
 
-        joint_angles = self.decode_joint_angles()
+        next_joint_angles = self.decode_opt_joint_angles()
 
         # 1.1- Step hand layer's mujoco forward kinematically
         self.hand_layer.step_mujoco_forward(next_wrist_pose_wxyz.detach().cpu().numpy(),
-                                            joint_angles.detach().cpu().numpy())
+                                            next_joint_angles.detach().cpu().numpy())
 
         # 2- Get Hand vertices/normals at the predicted [next_wrist_pose]
         if USE_MUJOCO_HAND_LAYER:
@@ -644,7 +647,7 @@ class HandOptimizer(torch.nn.Module):
                     self.hand_layer.mjw_data,
                     body_names=self.hand_layer.hand_body_names,
                     hand_base_pose=next_wrist_pose_wxyz.squeeze(),
-                    hand_qpos=joint_angles,
+                    hand_qpos=next_joint_angles,
                     is_collision=self.hand_layer.use_collision_mesh,
                     body_p3d_meshes=self.hand_layer.ori_hand_p3d_meshes,
                     device=self.device
@@ -656,11 +659,11 @@ class HandOptimizer(torch.nn.Module):
                 pred_normals = torch.cat(hand_p3dmesh_all.verts_normals_list()).unsqueeze(0)
                 # trimesh.Scene(p3d_to_trimesh(hand_p3dmesh_all)).show()
             else:
-                pred_vertices, pred_normals = self.hand_layer.get_forward_vertices(next_wrist_pose, joint_angles)
+                pred_vertices, pred_normals = self.hand_layer.get_forward_vertices(next_wrist_pose, next_joint_angles)
         else:
             if USE_NEWTON_HAND_LAYER:
                 next_wrist_pose = next_wrist_pose_wxyz
-            pred_vertices, pred_normals = self.hand_layer.get_forward_vertices(next_wrist_pose, joint_angles)
+            pred_vertices, pred_normals = self.hand_layer.get_forward_vertices(next_wrist_pose, next_joint_angles)
 
         self.hand_visual_verts = o3d_vox_downsample(pred_vertices.squeeze().detach().cpu().numpy())
         self.hand_visual_vert_normals = o3d_vox_downsample(pred_normals.squeeze().detach().cpu().numpy())
@@ -682,7 +685,7 @@ class HandOptimizer(torch.nn.Module):
                 obst.all_normals.repeat(self.nbatches, 1, 1))
 
             h2o_dist_neg = torch.logical_and(h2o_signed.abs() < 0.05, h2o_signed < 0.0)
-            hand_obstacle_collision_loss = -200 * torch.sum(h2o_signed * h2o_dist_neg, dim=1)
+            hand_obstacle_collision_loss = -100 * torch.sum(h2o_signed * h2o_dist_neg, dim=1)
         # torch.cuda.synchronize()
         # time_start = time.time()
 
@@ -700,8 +703,8 @@ class HandOptimizer(torch.nn.Module):
         loss_collision_h2o = -torch.sum(h2o_signed * h2o_dist_neg, dim=1)
         loss_collision_o2h = -torch.sum(o2h_signed * o2h_dist_neg, dim=1)
 
-        hand_obj_collision_loss = 75 * (1 * loss_collision_h2o + 10 * loss_collision_o2h)  # 75
-        # hand_obj_collision_loss = 200 * loss_collision_o2h  # 75
+        # hand_obj_collision_loss = 75 * (1 * loss_collision_h2o + 10 * loss_collision_o2h)  # 75
+        hand_obj_collision_loss = 200 * loss_collision_o2h  # 75
         # torch.cuda.synchronize()
         # time_cost = time.time() - time_start
         # print('time cost', time_cost)
@@ -773,7 +776,7 @@ class HandOptimizer(torch.nn.Module):
                 robust_compute_rotation_matrix_from_ortho6d(self.cur_wrist_rot)) * 0.2
 
         # 3.6- Abnormal joint loss (distance from joint means -> hand-specific loss)
-        angle_loss = self.hand_layer.compute_abnormal_joint_loss(joint_angles)
+        joint_angles_loss = self.hand_layer.compute_abnormal_joint_loss(next_joint_angles)
 
         if self.parallel_contact_points is not None:
             parallel_contact_loss = self.compute_parallel_contact_loss(self.hand_anchors)
@@ -781,7 +784,8 @@ class HandOptimizer(torch.nn.Module):
             parallel_contact_loss = 0.0
 
         total_cost = (hand_obj_collision_loss + hand_self_collision_loss + hand_rot_loss + hand_grasp_loss +
-                      E_dis + E_fc + contact_align_loss + hand_obstacle_collision_loss + angle_loss + parallel_contact_loss)
+                      E_dis + E_fc + contact_align_loss + hand_obstacle_collision_loss + joint_angles_loss +
+                      parallel_contact_loss)
 
         return total_cost
 
@@ -845,7 +849,7 @@ class HandOptimizer(torch.nn.Module):
 
         return HandGrasp(base_quat_wxyz=wrist_quat_wxyz.squeeze(),
                          base_pos=wrist_pos.squeeze(),
-                         joint_angles=self.decode_joint_angles(with_limit=False).detach().squeeze(),
+                         joint_angles=self.decode_opt_joint_angles(with_limit=False).detach().squeeze(),
                          obj_scale=self.object_data.scale,
                          obj_mesh_paths=self.object_data.geom_mesh_paths)
 
@@ -856,18 +860,19 @@ class HandOptimizer(torch.nn.Module):
         self.min_loss = torch.where(loss_mask, loss, self.min_loss)
         nonzero_idx = torch.nonzero(loss_mask, as_tuple=True)[0]
         if not torch.numel(nonzero_idx) == 0:
-            with (torch.no_grad()):
+            with torch.no_grad():
                 opt_wrist_rot = self.opt_wrist_rot[nonzero_idx]
                 self.best_wrist_rot[nonzero_idx] = (torch.nn.functional.normalize(opt_wrist_rot, dim=1)
                                                     if self.use_quat else opt_wrist_rot).clone().detach()
                 self.best_wrist_pos[nonzero_idx] = self.opt_wrist_pos[nonzero_idx].clone().detach()
                 self.best_joint_angles[nonzero_idx] = \
-                    self.decode_joint_angles(with_limit=False)[nonzero_idx].clone().detach()
+                    self.decode_opt_joint_angles(with_limit=False)[nonzero_idx].clone().detach()
         self.optimizer.zero_grad()
         loss.mean().backward()
         return loss
 
     def optimize(self, cur_wrist_pos: Optional[torch.Tensor] = None, cur_wrist_rot: Optional[torch.Tensor] = None,
+                 cur_joint_angles: Optional[torch.Tensor] = None,
                  n_iters=1000) -> torch.Tensor:
         # Update [self.cur_wrist_pose]
         if cur_wrist_pos is not None:
@@ -875,6 +880,8 @@ class HandOptimizer(torch.nn.Module):
         if cur_wrist_rot is not None:
             self.cur_wrist_rot.copy_(cur_wrist_rot if self.use_quat else
                                      compute_rotation_ortho6d_from_matrix(cur_wrist_rot))
+        if cur_joint_angles is not None:
+            self.cur_joint_angles.copy_(cur_joint_angles)
 
         # Start optimizing
         loss = 0
@@ -899,6 +906,7 @@ class HandOptimizer(torch.nn.Module):
 
     def step_optimize(self, cur_wrist_pos: Optional[torch.Tensor] = None,
                       cur_wrist_rot: Optional[torch.Tensor] = None,
+                      cur_joint_angles: Optional[torch.Tensor] = None,
                       substeps_num: int = 1) -> HandGrasp:
         # Transform objects & obstacles
         self.object_data.step(self.mj_data)
@@ -907,13 +915,19 @@ class HandOptimizer(torch.nn.Module):
                 obst.step(self.mj_data)
 
         # Next optimal grasp
-        self.cur_loss = self.optimize(cur_wrist_pos, cur_wrist_rot, n_iters=substeps_num)
+        self.cur_loss = self.optimize(cur_wrist_pos, cur_wrist_rot, cur_joint_angles,
+                                      n_iters=substeps_num)
 
         # Save [best_grasp] as [perfect_grasp] if qualified
         best_grasp = self.best_grasp_configuration(save_real=False)
         if self.cur_loss < self.LOSS_MIN_THRESHOLD:
-            self.perfect_local_grasp = (self.object_data.get_object_pose(self.mj_data).inverse() @
-                                        best_grasp.base_mat)
+            best_relative_grasp = (self.object_data.get_object_pose(self.mj_data).inverse() @
+                                   best_grasp.base_mat)
+            self.perfect_relative_grasp = HandGrasp(base_pos=best_relative_grasp[:3, 3],
+                                                    base_quat_wxyz=
+                                                    roma.quat_xyzw_to_wxyz(
+                                                        roma.rotmat_to_unitquat(best_relative_grasp[:3, :3])),
+                                                    joint_angles=best_grasp.joint_angles)
         return best_grasp
 
     def visualize_grasp(self, grasp: HandGrasp, object_meshes: dict[str, trimesh.Trimesh]):

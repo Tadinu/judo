@@ -46,8 +46,9 @@ if TYPE_CHECKING:
 OBJ_NAME = PANDA_LEAP.OBJECT_NAMES[0]
 USE_EE_MPC = False
 EE_DOFS_NO = 6
+PANDA_LEAP.USE_FINGERS_IK = False
 PANDA_LEAP.OBJECT_GRASP_TARGET_SITE_NAME = "mug_handle_center" if OBJ_NAME == 'mug' else OBJ_NAME
-PANDA_LEAP.OBJECT_INIT_POSES["mug"] = np.hstack([np.array([0, 0.5, 0.5]), IDENTITY_WXYZ])
+PANDA_LEAP.OBJECT_INIT_POSES["mug"] = np.hstack([np.array([0, 0.7, 0.6]), np.array([0.71, 0., 0., 0.71])])
 
 TABLE_NAME = "table"
 
@@ -144,7 +145,9 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             for arm_geom in PANDA_LEAP.ARM_GEOMS_NAMES
         ]
 
-        self.mpc_threshold = 0.05
+        # NOTE: If this is too high, meaning MPC stops too soon (too far away from the obj-grasp-target)
+        # -> ill-condition the initial hand pose for the optimizing!
+        self.mpc_threshold = 0.03
         self.reach_threshold_squared = 0.015
         self.orientation_threshold = 0.01
         self.last_obj_distance_to_goal = 0.
@@ -159,9 +162,9 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
 
         # Table
         mj_spec_add_body(spec, TABLE_NAME,
-                         body_pose=[0, 0.5, 0.2, 1, 0, 0, 0],
+                         body_pose=[0, 0.7, 0.2, 1, 0, 0, 0],
                          obj_geom_type=mj.mjtGeom.mjGEOM_BOX,
-                         obj_geom_size=[0.2, 0.2, 0.2],
+                         obj_geom_size=[0.5, 0.3, 0.2],
                          free_moving=False)
         for arm_body in PANDA_LEAP.arm_items_full_names(PANDA_LEAP.ARM_BODIES_NAMES):
             spec.add_exclude(bodyname1=arm_body, bodyname2=TABLE_NAME)

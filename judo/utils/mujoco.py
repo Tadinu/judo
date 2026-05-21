@@ -84,11 +84,11 @@ def mj_sensor_idx(model: mj.MjModel, sensor_name: str) -> int:
     return model.sensor(sensor_name).adr[0]
 
 
-def mj_get_mocap_id(model: mj.MjModel, mocap_body_name: str) -> int:
+def mj_get_mocap_id(model: mj.MjModel, mocap_name: str) -> int:
     if False:
-        return model.body(mocap_body_name).mocapid[0]
+        return model.body(mocap_name).mocapid[0]
     else:
-        mocap_body_id = model.body(mocap_body_name).id
+        mocap_body_id = model.body(mocap_name).id
         return model.body_mocapid[mocap_body_id] if mocap_body_id > -1 else -1
 
 

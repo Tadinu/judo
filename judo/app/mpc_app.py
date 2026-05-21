@@ -50,6 +50,7 @@ RECORD_TIME = 300
 
 class MPCApp:
     USE_DIFF_IK = True
+    USE_CURRENT_HAND_BASE_CENTRIC_GRASP = True
 
     def __init__(self, task_name: str,
                  optimizer_name: str,
@@ -213,13 +214,13 @@ class MPCApp:
                                                       joint_limit_upper=np.pi / 6)
                 self.hand_base = self.mj_data.body(robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME))
                 # Object-centric (VS hand-base centric) grasp initialization
-                hand_params = HandParams(hand_model_name=self.robot_class.HAND_MODEL_NAME,
-                                         xml_path=self.robot_class.HAND_XML_PATH,
+                hand_params = HandParams(hand_model_name=robot_class.HAND_MODEL_NAME,
+                                         xml_path=robot_class.HAND_XML_PATH,
                                          joint_angles=torch.from_numpy(np.array(self.mj_data.qpos[self.hand_qpos_ids],
                                                                                 dtype=np.float32)).to(device).
                                          unsqueeze(0)) if True \
-                    else HandParams.get(hand_model_name=self.robot_class.HAND_MODEL_NAME,
-                                        xml_path=self.robot_class.HAND_XML_PATH,
+                    else HandParams.get(hand_model_name=robot_class.HAND_MODEL_NAME,
+                                        xml_path=robot_class.HAND_XML_PATH,
                                         joint_angles=np.array(self.mj_data.qpos[self.hand_qpos_ids], dtype=np.float32),
                                         hand_pos=self.hand_base.xpos.copy(),
                                         hand_quat_wxyz=self.hand_base.xquat.copy())
@@ -255,7 +256,7 @@ class MPCApp:
             self.fabrics_env = self.fabrics_env_class(arm_hand_class=self.fabrics_robot_class,
                                                       arm_xml=self.fabrics_arm_xml,
                                                       hand_xml=self.fabrics_hand_xml,
-                                                      use_finger_fabrics=True,
+                                                      use_finger_fabrics=self.robot_class.USE_FINGERS_IK,
                                                       fabric_cfg=self.fabric_cfg)
             self.fabrics_env.init()
             self.fabrics_robot = self.fabrics_env.robots_system
@@ -293,7 +294,7 @@ class MPCApp:
                     self.plan()
 
                 # Robot class specific GUI visualizing
-                # self.robot_class.visualize(viewer=mj_viewer, data=self.mj_data)
+                self.robot_class.visualize(viewer=mj_viewer, data=self.mj_data)
 
                 # Step
                 self.sim.step()
@@ -377,21 +378,34 @@ class MPCApp:
     def plan_arm_hand(self):
         # Hand plan
         # Update [hand_opt]'s opt-wrist-pose to hand-base
-        if self.is_mujoco and self.is_last_plan_by_mpc:
+        assert self.is_mujoco
+        cur_hand_pos = torch.tensor(self.hand_base.xpos, dtype=torch.float32, device=self.device)
+        cur_hand_quat_wxyz = torch.tensor(self.hand_base.xquat, dtype=torch.float32, device=self.device)
+        cur_wrist_rot = cur_hand_quat_wxyz if self.hand_opt.use_quat \
+            else roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(cur_hand_quat_wxyz))
+        cur_joint_angles = torch.tensor(self.mj_data.qpos[self.hand_qpos_ids], dtype=torch.float32,
+                                        device=self.device)
+
+        grasp_pos = grasp_quat_wxyz = None
+        if self.is_last_plan_by_mpc:
             assert self.hand_opt.use_quat, "Only quat-based grasp is supported!"
-            USE_HAND_BASE_CENTRIC_GRASP = True
-            if USE_HAND_BASE_CENTRIC_GRASP:
-                grasp_pos = torch.tensor(self.hand_base.xpos, dtype=torch.float32, device=self.device).unsqueeze(0)
-                grasp_quat_wxyz = torch.tensor(self.hand_base.xquat, dtype=torch.float32,
-                                               device=self.device).unsqueeze(0)
+            if self.USE_CURRENT_HAND_BASE_CENTRIC_GRASP:
+                grasp_pos = cur_hand_pos.unsqueeze(0)
+                grasp_quat_wxyz = cur_hand_quat_wxyz.unsqueeze(0)
+                # joint_angles = cur_joint_angles.unsqueeze(0)
             else:
-                perfect_local_grasp = self.hand_opt.perfect_local_grasp
-                if perfect_local_grasp is not None:
-                    print("REUSE PERFECT GRASP AS INIT", self.hand_opt.cur_loss)
-                    perfect_wrist_pose = self.object_data.get_object_pose(self.mj_data) @ perfect_local_grasp
-                    grasp_pos = perfect_wrist_pose[:3, 3]
-                    grasp_quat_wxyz = roma.quat_xyzw_to_wxyz(
-                        roma.rotmat_to_unitquat(perfect_wrist_pose[:3, :3]))
+                if False:
+                    perfect_relative_grasp = self.hand_opt.perfect_relative_grasp
+                    if perfect_relative_grasp:
+                        print("REUSE PERFECT GRASP AS INIT", self.hand_opt.cur_loss)
+                        perfect_wrist_pose = torch.eye(4)
+                        perfect_wrist_pose[:3, 3] = perfect_relative_grasp.base_pos.unsqueeze(0)
+                        perfect_wrist_pose[:3, :3] = roma.unitquat_to_rotmat(
+                            roma.quat_wxyz_to_xyzw(perfect_relative_grasp.base_quat_wxyz)).unsqueeze(0)
+                        perfect_wrist_pose = self.object_data.get_object_pose(self.mj_data) @ perfect_wrist_pose
+                        grasp_pos = perfect_wrist_pose[:3, 3]
+                        grasp_quat_wxyz = roma.quat_xyzw_to_wxyz(roma.rotmat_to_unitquat(perfect_wrist_pose[:3, :3]))
+                        # joint_angles = perfect_relative_grasp.joint_angles
                 else:
                     print("RECALCULATE INIT GRASP", self.hand_opt.cur_loss)
                     new_initial_grasp = self.hand_opt.recalculate_initial_grasp()
@@ -399,46 +413,50 @@ class MPCApp:
                                                 device=self.device)
                     grasp_quat_wxyz = torch.as_tensor(new_initial_grasp.base_quat_wxyz, dtype=torch.float32,
                                                       device=self.device)
-            mj_data_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
-                               pos=grasp_pos.cpu().numpy(), quat=grasp_quat_wxyz.cpu().numpy())
-            assert self.hand_opt.use_quat
-            self.hand_opt.update_opt_wrist_pose(wrist_pos=grasp_pos, wrist_rot_wxyz=grasp_quat_wxyz)
+                    # joint_angles = torch.as_tensor(new_initial_grasp.joint_angles, dtype=torch.float32,
+                    #                               device=self.device)
+            if grasp_pos is not None and grasp_quat_wxyz is not None:
+                mj_data_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
+                                   pos=grasp_pos.cpu().numpy(), quat=grasp_quat_wxyz.cpu().numpy())
+                assert self.hand_opt.use_quat
+                # NOTE: Do not update [opt_joint_angles] here-in!
+                self.hand_opt.update_opt_params(wrist_pos=grasp_pos, wrist_rot_wxyz=grasp_quat_wxyz)
 
         # if self.hand_opt.cur_loss > self.hand_opt.LOSS_MIN_THRESHOLD:
         if True:
             hand_batches_num = self.hand_opt.nbatches
             assert hand_batches_num == 1
-            cur_hand_pos = torch.tensor(self.hand_base.xpos, dtype=torch.float32, device=self.device)
-            cur_hand_quat = torch.tensor(self.hand_base.xquat, dtype=torch.float32, device=self.device)
-            cur_wrist_rot = cur_hand_quat if self.hand_opt.use_quat \
-                else roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(cur_hand_quat))
             dist = None
             if self.next_grasp:
                 dist = self.next_grasp.distance_from(HandGrasp(base_pos=cur_hand_pos,
-                                                               base_quat_wxyz=cur_hand_quat,
-                                                               joint_angles=torch.tensor(
-                                                                   self.mj_data.qpos[self.hand_qpos_ids],
-                                                                   dtype=torch.float32, device=self.device)))
+                                                               base_quat_wxyz=cur_hand_quat_wxyz,
+                                                               joint_angles=cur_joint_angles))
             if not dist or dist < 1.0:
-                self.next_grasp = self.hand_opt.step_optimize(cur_wrist_pos=cur_hand_pos.repeat(hand_batches_num, 1),
-                                                              cur_wrist_rot=cur_wrist_rot.repeat(hand_batches_num, 1))
-            self.sim.task.mpc_disabled = self.hand_opt.cur_loss > self.hand_opt.LOSS_MIN_THRESHOLD or (
-                    dist and dist < 1.0)
-            print("LOSS", self.hand_opt.cur_loss, dist, "MPC enabled", self.sim.task.mpc_disabled)
+                self.next_grasp = self.hand_opt.step_optimize(
+                    cur_wrist_pos=cur_hand_pos.repeat(hand_batches_num, 1),
+                    cur_wrist_rot=cur_wrist_rot.repeat(hand_batches_num, 1),
+                    cur_joint_angles=cur_joint_angles.repeat(hand_batches_num, 1))
+                print("LOSS", self.hand_opt.cur_loss, dist, "MPC disabled", self.sim.task.mpc_disabled)
+            self.sim.task.mpc_disabled = (self.hand_opt.cur_loss > self.hand_opt.LOSS_MIN_THRESHOLD
+                                          or (dist and dist < 1.0))
 
         # Arm plan
         next_grasp_pose_wxyz = self.next_grasp.base_pose_wxyz
         mj_data_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
                            pos=self.next_grasp.base_pos.cpu().numpy(),
                            quat=self.next_grasp.base_quat_wxyz.cpu().numpy())
+        next_grasp_joint_angles = self.next_grasp.joint_angles.cpu().numpy()
         if self.USE_DIFF_IK:
             # NOTE: [self.diff_ik.data] != self.mj_data
             next_grasp_pose_wxyz = next_grasp_pose_wxyz.cpu().numpy()
             target_ee_poses = {self.diff_ik.main_ee_name: next_grasp_pose_wxyz}
-            for ftip_name in self.robot_class.FINGER_TIPS_NAMES:
-                # NOTE: [self.hand_opt.hand_layer.mj_data] is hand only, so using plain [ftip_name] directly!
-                target_ee_poses[self.robot_class.hand_item_full_name(ftip_name)] = (
-                    mj_data_site_pose(self.hand_opt.hand_layer.mj_data, ftip_name, as_single_array=True))
+            if self.robot_class.USE_FINGERS_IK:
+                for ftip_name in self.robot_class.FINGER_TIPS_NAMES:
+                    # NOTE: [self.hand_opt.hand_layer.mj_data] is hand only, so using plain [ftip_name] directly!
+                    target_ee_poses[self.robot_class.hand_item_full_name(ftip_name)] = (
+                        mj_data_site_pose(self.hand_opt.hand_layer.mj_data, ftip_name, as_single_array=True))
+            else:
+                self.diff_ik.posture_task.target_q[self.hand_qpos_ids] = next_grasp_joint_angles
             q = self.diff_ik.plan(target_ee_poses=target_ee_poses, use_solver=True)
             if q is None:
                 q = self.diff_ik.plan(target_ee_poses=target_ee_poses, use_solver=False)
@@ -450,8 +468,8 @@ class MPCApp:
             q = self.fabrics_controller.q_prev.detach().cpu().numpy().squeeze()
         self.mj_robot_ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
         self.mj_robot_ctrl[self.hand_ctrl_ids] = q[self.hand_qpos_ids] \
-            if (not self.USE_DIFF_IK and self.fabrics_controller.use_finger_fabrics) \
-            else self.next_grasp.joint_angles.cpu().numpy()
+            if (self.USE_DIFF_IK or self.fabrics_controller.use_finger_fabrics) \
+            else next_grasp_joint_angles
 
         # Visualizing
         #
@@ -460,14 +478,14 @@ class MPCApp:
             self.hand_opt.visualize_grasp(self.next_grasp, self.object_data.geom_meshes)
 
         # - Fabrics
-        # if not self.USE_DIFF_IK and self.fabrics_controller and self.is_mujoco:
-        #    self.fabrics_controller.visualize_fabrics(self.sim.mj_viewer.user_scn)
+        if not self.USE_DIFF_IK and self.fabrics_controller and self.is_mujoco:
+            self.fabrics_controller.visualize_fabrics(self.sim.mj_viewer.user_scn)
 
         # - Hand pcl
         self.visualize_optimized_hand_pcl()
 
         # - Obj pcl
-        # self.visualize_obj_pcl()
+        self.visualize_obj_pcl()
 
     def update_control(self, nominal_spline_data: SplineData) -> None:
         """Event handler for processing controls received from controller node."""
