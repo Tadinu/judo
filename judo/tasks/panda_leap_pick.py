@@ -46,7 +46,7 @@ if TYPE_CHECKING:
 OBJ_NAME = PANDA_LEAP.OBJECT_NAMES[0]
 USE_EE_MPC = False
 EE_DOFS_NO = 6
-PANDA_LEAP.USE_FINGERS_IK = False
+PANDA_LEAP.FINGERS_IK_ENABLED = False
 PANDA_LEAP.OBJECT_GRASP_TARGET_SITE_NAME = "mug_handle_center" if OBJ_NAME == 'mug' else OBJ_NAME
 PANDA_LEAP.OBJECT_INIT_POSES["mug"] = np.hstack([np.array([0, 0.7, 0.6]), np.array([0.71, 0., 0., 0.71])])
 
@@ -94,6 +94,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         self.last_phase = ObjectRelocatingPhase.REACHING_OBJ
         self.cur_phase_start_time[ObjectRelocatingPhase.REACHING_OBJ] = time.time()
         self.desired_grasp_direction: np.ndarray = None
+        self.desired_hand_qpos: np.ndarray = np.zeros(PANDA_LEAP.HAND_DOFS_NO)
 
         self.map_controls = self.map_ee_to_arm_controls if USE_EE_MPC else None
         self.rollout_diff_iks = None
@@ -107,6 +108,8 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         self.obj_id = self.mj_model.body(OBJ_NAME).id
         self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
         self.obj_dof_ids = mj_get_dof_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
+        self.hand_qpos_ids = mj_get_qpos_ids(self.mj_model,
+                                             PANDA_LEAP.hand_items_full_names(PANDA_LEAP.HAND_JOINTS_NAMES))
         self.hand_dof_ids = mj_get_dof_ids(self.mj_model,
                                            PANDA_LEAP.hand_items_full_names(PANDA_LEAP.HAND_JOINTS_NAMES))
         self.target_mocap_id = mj_get_mocap_id(self.mj_model, PANDA_LEAP.goal_name(OBJ_NAME))
@@ -296,7 +299,10 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
                 + 10 * np.square(grasp_direction - obj_grasp_direction).sum(-1).mean(-1)
         )
 
-        grasp_cost = 0.001 * np.sum(np.square(controls)) + grasp_direction_cost
+        grasp_desired_cost = 0.0 if is_reaching_obj else \
+            np.sum(np.square(self.desired_hand_qpos - states[..., self.hand_qpos_ids]))
+
+        grasp_cost = 0.001 * np.sum(np.square(controls)) + grasp_direction_cost + 100 * grasp_desired_cost
         if True:
             arm_contact_cost = self.sensors_contact_cost(sensors, self.obj_contact_with_arm_sensors)
             finger_contact_cost = 10 * self.sensors_contact_cost(sensors, self.obj_contact_with_finger_palm_sensors)

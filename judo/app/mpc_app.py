@@ -256,7 +256,7 @@ class MPCApp:
             self.fabrics_env = self.fabrics_env_class(arm_hand_class=self.fabrics_robot_class,
                                                       arm_xml=self.fabrics_arm_xml,
                                                       hand_xml=self.fabrics_hand_xml,
-                                                      use_finger_fabrics=self.robot_class.USE_FINGERS_IK,
+                                                      use_finger_fabrics=self.robot_class.FINGERS_IK_ENABLED,
                                                       fabric_cfg=self.fabric_cfg)
             self.fabrics_env.init()
             self.fabrics_robot = self.fabrics_env.robots_system
@@ -376,6 +376,9 @@ class MPCApp:
         return geom_poses
 
     def plan_arm_hand(self):
+        # Update object data for hand-opt
+        self.hand_opt.step_object()
+
         # Hand plan
         # Update [hand_opt]'s opt-wrist-pose to hand-base
         assert self.is_mujoco
@@ -388,6 +391,7 @@ class MPCApp:
 
         grasp_pos = grasp_quat_wxyz = None
         if self.is_last_plan_by_mpc:
+            print("BACK TO MPC")
             assert self.hand_opt.use_quat, "Only quat-based grasp is supported!"
             if self.USE_CURRENT_HAND_BASE_CENTRIC_GRASP:
                 grasp_pos = cur_hand_pos.unsqueeze(0)
@@ -431,14 +435,19 @@ class MPCApp:
                 dist = self.next_grasp.distance_from(HandGrasp(base_pos=cur_hand_pos,
                                                                base_quat_wxyz=cur_hand_quat_wxyz,
                                                                joint_angles=cur_joint_angles))
-            if not dist or dist < 1.0:
+            grasp_optimizing = (dist is not None) and dist < 0.15
+            if not dist or grasp_optimizing:
                 self.next_grasp = self.hand_opt.step_optimize(
                     cur_wrist_pos=cur_hand_pos.repeat(hand_batches_num, 1),
                     cur_wrist_rot=cur_wrist_rot.repeat(hand_batches_num, 1),
                     cur_joint_angles=cur_joint_angles.repeat(hand_batches_num, 1))
                 print("LOSS", self.hand_opt.cur_loss, dist, "MPC disabled", self.sim.task.mpc_disabled)
+                if (dist is not None) and dist < 0.075:
+                    grasp_optimizing = False
+                    self.sim.task.desired_hand_qpos = self.next_grasp.joint_angles.cpu().numpy()
+            print("grasp_optimizing", grasp_optimizing)
             self.sim.task.mpc_disabled = (self.hand_opt.cur_loss > self.hand_opt.LOSS_MIN_THRESHOLD
-                                          or (dist and dist < 1.0))
+                                          or grasp_optimizing)
 
         # Arm plan
         next_grasp_pose_wxyz = self.next_grasp.base_pose_wxyz
@@ -450,7 +459,7 @@ class MPCApp:
             # NOTE: [self.diff_ik.data] != self.mj_data
             next_grasp_pose_wxyz = next_grasp_pose_wxyz.cpu().numpy()
             target_ee_poses = {self.diff_ik.main_ee_name: next_grasp_pose_wxyz}
-            if self.robot_class.USE_FINGERS_IK:
+            if self.robot_class.FINGERS_IK_ENABLED:
                 for ftip_name in self.robot_class.FINGER_TIPS_NAMES:
                     # NOTE: [self.hand_opt.hand_layer.mj_data] is hand only, so using plain [ftip_name] directly!
                     target_ee_poses[self.robot_class.hand_item_full_name(ftip_name)] = (
@@ -556,9 +565,12 @@ class MPCApp:
     def visualize_optimized_hand_pcl(self):
         if self.is_mujoco:
             mj_user_scn = self.sim.mj_viewer.user_scn
-            self._draw_points(mj_user_scn, self.hand_opt.hand_visual_verts, size=[0.005], color=[1, 1, 0, 1])
-            hand_anchors = self.hand_opt.hand_anchors.squeeze().detach().cpu().numpy()
-            self._draw_points(mj_user_scn, hand_anchors, size=[0.01], color=[1, 0, 0, 1])
+            # Hand pcl/anchors
+            if self.hand_opt.hand_visual_verts is not None:
+                self._draw_points(mj_user_scn, self.hand_opt.hand_visual_verts, size=[0.005], color=[1, 1, 0, 1])
+            if self.hand_opt.hand_anchors is not None:
+                hand_anchors = self.hand_opt.hand_anchors.squeeze().detach().cpu().numpy()
+                self._draw_points(mj_user_scn, hand_anchors, size=[0.01], color=[1, 0, 0, 1])
 
             # Grasp site
             if self.hand_opt.hand_visual_grasp_site_pos is not None:

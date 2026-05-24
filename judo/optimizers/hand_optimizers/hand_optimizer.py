@@ -904,19 +904,19 @@ class HandOptimizer(torch.nn.Module):
         # print('{}-th iter: {}'.format(iter_step, loss.mean().item()))
         return loss
 
-    def step_optimize(self, cur_wrist_pos: Optional[torch.Tensor] = None,
-                      cur_wrist_rot: Optional[torch.Tensor] = None,
-                      cur_joint_angles: Optional[torch.Tensor] = None,
-                      substeps_num: int = 1) -> HandGrasp:
+    def step_object(self):
         # Transform objects & obstacles
         self.object_data.step(self.mj_data)
         if self.obstacles_data:
             for obst in self.obstacles_data:
                 obst.step(self.mj_data)
 
+    def step_optimize(self, cur_wrist_pos: Optional[torch.Tensor] = None,
+                      cur_wrist_rot: Optional[torch.Tensor] = None,
+                      cur_joint_angles: Optional[torch.Tensor] = None,
+                      substeps_num: int = 1) -> HandGrasp:
         # Next optimal grasp
-        self.cur_loss = self.optimize(cur_wrist_pos, cur_wrist_rot, cur_joint_angles,
-                                      n_iters=substeps_num)
+        self.cur_loss = self.optimize(cur_wrist_pos, cur_wrist_rot, cur_joint_angles, n_iters=substeps_num)
 
         # Save [best_grasp] as [perfect_grasp] if qualified
         best_grasp = self.best_grasp_configuration(save_real=False)
