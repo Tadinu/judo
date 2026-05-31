@@ -25,7 +25,7 @@ fabric_params:
     damping: 50.
     damping_sharpness: 10.
     damping_radius: 0.2
-  palm_attractor:
+  hand_base_attractor:
     min_isotropic_mass: 1.
     max_isotropic_mass: 1.
     mass_sharpness: 10.

@@ -44,6 +44,7 @@ if TYPE_CHECKING:
     from judo.simulation.base import Simulation
 
 OBJ_NAME = PANDA_LEAP.OBJECT_NAMES[0]
+OBJ_COLLISION_GEOM_NAMES = PANDA_LEAP.OBJECT_COLLISION_GEOM_NAMES[OBJ_NAME]
 USE_EE_MPC = False
 EE_DOFS_NO = 6
 PANDA_LEAP.FINGERS_IK_ENABLED = False
@@ -112,7 +113,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
                                              PANDA_LEAP.hand_items_full_names(PANDA_LEAP.HAND_JOINTS_NAMES))
         self.hand_dof_ids = mj_get_dof_ids(self.mj_model,
                                            PANDA_LEAP.hand_items_full_names(PANDA_LEAP.HAND_JOINTS_NAMES))
-        self.target_mocap_id = mj_get_mocap_id(self.mj_model, PANDA_LEAP.goal_name(OBJ_NAME))
+        self.target_mocap_id = mj_get_mocap_id(self.mj_model, PANDA_LEAP.goal_obj_name(OBJ_NAME))
         self.grasp_site_name = PANDA_LEAP.hand_item_full_name(PANDA_LEAP.HAND_GRASP_SITE_NAME)
         self.grasp_site_id = self.mj_model.site(self.grasp_site_name).id
         self.grasp_direction_site_name = PANDA_LEAP.hand_item_full_name(f"direction_{PANDA_LEAP.HAND_GRASP_SITE_NAME}")
@@ -139,13 +140,15 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
 
         # contact sensors
         self.obj_contact_with_finger_palm_sensors = [
-            self.get_sensor_start_index(f"{OBJ_NAME}_contact_with_{finger_palm_geom}")
+            self.get_sensor_start_index(f"{obj_geom}_contact_with_{finger_palm_geom}")
             for finger_palm_geom in PANDA_LEAP.hand_items_full_names(PANDA_LEAP.FINGER_PALMS_GEOM_NAMES, 0)
+            for obj_geom in OBJ_COLLISION_GEOM_NAMES
         ]
 
         self.obj_contact_with_arm_sensors = [
-            self.get_sensor_start_index(f"{OBJ_NAME}_contact_with_{arm_geom}")
+            self.get_sensor_start_index(f"{obj_geom}_contact_with_{arm_geom}")
             for arm_geom in PANDA_LEAP.ARM_GEOMS_NAMES
+            for obj_geom in OBJ_COLLISION_GEOM_NAMES
         ]
 
         # NOTE: If this is too high, meaning MPC stops too soon (too far away from the obj-grasp-target)

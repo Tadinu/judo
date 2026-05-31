@@ -23,7 +23,7 @@ if TYPE_CHECKING:
 from mjmanip import DEFAULT_SCENE_XML_PATH
 from mjmanip.robot.leap_mjx import LeapMjx
 from mjmanip.robot.leap_fabrics import (LeapWithFabrics, LeapWithFabricsEnv, HAND_XML_PATH,
-                                        LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \
+                                        LEAP_FABRIC_HAND_BASE_CONTROL_FRAME_NAMES, \
                                         LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES)
 from mjmanip.mj_utils import mj_model_joints_qids
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig

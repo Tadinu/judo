@@ -47,7 +47,7 @@ else:
 from mjmanip.mj_utils import mj_model_joints_qids, mj_body_free_joint_name, mj_data_site_pose
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
-from mjmanip.robot.leap_fabrics import LEAP_FABRIC_PALM_CONTROL_FRAME_NAMES, \
+from mjmanip.robot.leap_fabrics import LEAP_FABRIC_HAND_BASE_CONTROL_FRAME_NAMES, \
     LEAP_FABRIC_FINGER_CONTROL_FRAME_NAMES
 
 # judo
@@ -126,7 +126,7 @@ class LeapFreeJointObjectPick(LeapCube):
         self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
         self.obj_dof_ids = mj_get_dof_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
         self.hand_dof_ids = mj_get_dof_ids(self.mj_model, hand_class.HAND_JOINTS_NAMES)
-        self.target_mocap_id = mj_get_mocap_id(self.mj_model, hand_class.goal_name(OBJ_NAME))
+        self.target_mocap_id = mj_get_mocap_id(self.mj_model, hand_class.goal_obj_name(OBJ_NAME))
         self.grasp_site_name = hand_class.HAND_GRASP_SITE_NAME
         self.grasp_site_id = self.mj_model.site(self.grasp_site_name).id
         self.grasp_direction_site_name = f"direction_{hand_class.HAND_GRASP_SITE_NAME}"

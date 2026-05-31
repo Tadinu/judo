@@ -101,7 +101,7 @@ class HandGrasp:
     @property
     def base_pose_wxyz(self) -> Union[torch.Tensor, np.ndarray]:
         base_pos_quat = [self.base_pos, self.base_quat_wxyz]
-        return torch.concat(base_pos_quat, dim=-1) if self.is_gpu else np.concat(base_pos_quat, axis=-1)
+        return torch.cat(base_pos_quat, dim=-1) if self.is_gpu else np.concat(base_pos_quat, axis=-1)
 
     @property
     def base_mat(self) -> Union[torch.Tensor, np.ndarray]:

@@ -71,7 +71,7 @@ class IIWA7AllegroPick(Task[IIWA7AllegroPickConfig]):
         super().init_ids()
         self.obj_id = mj.mj_name2id(self.mj_model, mj.mjtObj.mjOBJ_BODY, OBJ_NAME)
         self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [mj_body_free_joint_name(OBJ_NAME)])
-        self.target_mocap_id = mj_get_mocap_id(self.mj_model, IIWA7AllegroBiotac.goal_name(OBJ_NAME))
+        self.target_mocap_id = mj_get_mocap_id(self.mj_model, IIWA7AllegroBiotac.goal_obj_name(OBJ_NAME))
 
         # distance sensors
         # NOTE: For rollout result analysis, these are only valid IF MuJoCo-C Rollout backend supports mocap_pos/quat

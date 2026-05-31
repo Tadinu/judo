@@ -26,6 +26,7 @@ from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
 from mjmanip.mj_utils import (mj_data_body_geoms, mj_model_joints_qids, mj_model_actuators_id_list, mj_data_move_mocap,
                               mj_scene_clear, mj_scene_draw_spheres, mj_data_mocap_pose, mj_data_geoms_global_poses,
                               mj_data_site_pose)
+from mjmanip.pytorch3d_utils import p3d_multiply_poses, p3d_pose_inverse
 from mjmanip.robot.arm_hand_fabrics import ArmHandWithFabricsEnv
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
@@ -49,7 +50,7 @@ RECORD_TIME = 300
 
 
 class MPCApp:
-    USE_DIFF_IK = True
+    USE_DIFF_IK = False
     USE_CURRENT_HAND_BASE_CENTRIC_GRASP = True
 
     def __init__(self, task_name: str,
@@ -157,6 +158,7 @@ class MPCApp:
                 OBJ_GEOM_NAMES = robot_class.OBJECT_GEOM_NAMES[OBJ_NAME]
                 self.obj = self.mj_data.body(OBJ_NAME)
                 self.obj_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in OBJ_GEOM_NAMES}
+                self.obj_visual_geom = self.obj_geoms[OBJ_GEOM_NAMES[0]]
                 self.object_data = ObjectData.get_mj_object_data(OBJ_NAME, self.mj_model, self.mj_data, self.mj_spec,
                                                                  body_names=OBJ_BODY_NAMES,
                                                                  geom_names=OBJ_GEOM_NAMES,
@@ -382,6 +384,7 @@ class MPCApp:
         # Hand plan
         # Update [hand_opt]'s opt-wrist-pose to hand-base
         assert self.is_mujoco
+        cur_arm_qpos = torch.tensor(self.mj_data.qpos[self.arm_qpos_ids], dtype=torch.float32, device=self.device)
         cur_hand_pos = torch.tensor(self.hand_base.xpos, dtype=torch.float32, device=self.device)
         cur_hand_quat_wxyz = torch.tensor(self.hand_base.xquat, dtype=torch.float32, device=self.device)
         cur_wrist_rot = cur_hand_quat_wxyz if self.hand_opt.use_quat \
@@ -445,7 +448,7 @@ class MPCApp:
                 if (dist is not None) and dist < 0.075:
                     grasp_optimizing = False
                     self.sim.task.desired_hand_qpos = self.next_grasp.joint_angles.cpu().numpy()
-            print("grasp_optimizing", grasp_optimizing)
+            # print("grasp_optimizing", grasp_optimizing)
             self.sim.task.mpc_disabled = (self.hand_opt.cur_loss > self.hand_opt.LOSS_MIN_THRESHOLD
                                           or grasp_optimizing)
 
@@ -470,15 +473,17 @@ class MPCApp:
             if q is None:
                 q = self.diff_ik.plan(target_ee_poses=target_ee_poses, use_solver=False)
         else:
-            self.fabrics_controller.step(new_palm_target=torch.as_tensor(next_grasp_pose_wxyz),
-                                         new_finger_targets=self.hand_opt.hand_layer.fingertip_fabric_poses,
-                                         cur_obj_poses={self.object_data.obj_name: np.concat([self.obj.xpos,
-                                                                                              self.obj.xquat])})
+            obj_geom_quat = np.zeros(4)
+            mj.mju_mat2Quat(obj_geom_quat, self.obj_visual_geom.xmat)
+            # cur_obj_poses = {
+            #   self.object_data.obj_name: np.concat([self.obj_visual_geom.xpos, obj_geom_quat])}
+            self.fabrics_controller.step(
+                new_qpos_target=torch.cat([cur_arm_qpos, torch.as_tensor(self.next_grasp.joint_angles)]),
+                new_hand_base_target=torch.as_tensor(next_grasp_pose_wxyz),
+                new_finger_targets=self.hand_opt.hand_layer.fingertip_fabric_poses)
             q = self.fabrics_controller.q_prev.detach().cpu().numpy().squeeze()
         self.mj_robot_ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
-        self.mj_robot_ctrl[self.hand_ctrl_ids] = q[self.hand_qpos_ids] \
-            if (self.USE_DIFF_IK or self.fabrics_controller.use_finger_fabrics) \
-            else next_grasp_joint_angles
+        self.mj_robot_ctrl[self.hand_ctrl_ids] = q[self.hand_qpos_ids]
 
         # Visualizing
         #
