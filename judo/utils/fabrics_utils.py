@@ -278,10 +278,10 @@ class FabricsAgent:
             return out_rollout_controls
 
         elif self.USE_FINGER_EE_MULTI_CIRCULAR_TASK_SPACES:
-            from mjmanip.mj_utils import mj_get_geom_mesh_data
+            from mjmanip.mj_utils import mj_model_geom_mesh_data
             # TODO: TO MOVE THIS TO MPCAPP THEN ONLY PASS OBJ MESH NORMALS TO FabricsAgent
             mug_geom_id = self.mj_model.geom("mug").id
-            mug_vertices, mug_faces, mug_vertex_normals = mj_get_geom_mesh_data(self.mj_model, mug_geom_id)
+            mug_vertices, mug_faces, mug_vertex_normals = mj_model_geom_mesh_data(self.mj_model, mug_geom_id)
 
             obj_mesh_verts = wp.array(
                 data=mug_vertices,

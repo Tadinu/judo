@@ -20,7 +20,8 @@ from judo import PACKAGE_ROOT
 from judo.hand_layers.leap_layer import LeapHandLayer, LeapAnchor
 
 # mjmanip
-from mjmanip.mj_utils import IDENTITY_POSE, mj_step, mj_scene_draw_pointcloud, mj_mat4x4_to_pose, mj_data_site_pose
+from mjmanip.mj_utils import (IDENTITY_POSE, mj_step, mj_scene_draw_pointcloud, mj_mat4x4_to_pose,
+                              mj_data_geom_body, mj_data_site_pose)
 from mjmanip.trimesh_utils import mj_get_body_trimeshes
 from mjmanip.warp_utils import wp_transform_from_mj, wp_kernel_transform_mesh_points, wp_kernel_compute_vertex_normals
 from mjmanip.pytorch3d_utils import p3d_transform_points, mjw_geoms_to_pytorch3d_meshes
@@ -106,7 +107,7 @@ class MJLeapHandLayer(LeapHandLayer):
                                   model_spec=self.mj_spec,
                                   body_names=self.hand_body_names,
                                   is_collision=self.use_collision_mesh,
-                                  use_global_pose=False))
+                                  use_world_transform=False))
 
         if USE_MJ_WARP:
             self.ori_hand_p3d_meshes: dict[str, tuple[pytorch3d.structures.Meshes, pytorch3d.transforms.Transform3d]] = \
@@ -181,7 +182,7 @@ class MJLeapHandLayer(LeapHandLayer):
         # => Here, need to transform [wp_meshes_points/normals] back to the local geom frames
         wp_meshes_points, wp_meshes_normals = self.create_mesh_verts_normals(self.hand_surface_points, to_wp=True)
         for geom_name, geom_surface_points in self.hand_surface_points.items():
-            mj_body = self.mj_data.body(self.mj_model.geom(geom_name).bodyid[0])
+            mj_body = mj_data_geom_body(self.mj_model, self.mj_data, geom_name)
             geom_local_pose = mj_mat4x4_to_pose(self.ori_hand_meshes[geom_name][2])
 
             wp.launch(kernel=wp_kernel_transform_mesh_points,
@@ -260,7 +261,7 @@ class MJLeapHandLayer(LeapHandLayer):
                                                     qpos=hand_qpos[0],
                                                     is_collision=self.use_collision_mesh,
                                                     use_convex_hull=True,
-                                                    use_global_pose=True)
+                                                    use_world_transform=True)
 
         hand_composite_points = {}
         hand_surface_points = {}

@@ -22,8 +22,10 @@ PANDA_LEAP.NINSTANCES = 1
 
 # hand optimizer
 from hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams
-from object_utils import ObjectData
+
+# mjmanip
 from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
+from mjmanip.entity_utils import EntityData
 
 BATCHES_NUM = 1
 
@@ -63,9 +65,9 @@ if __name__ == "__main__":
     for obj_filepath in filepath_list:
         obj_name = Path(obj_filepath).stem
         obj_geom_names = []  # ['mug_handle0', 'mug_handle1', 'mug_handle2', 'mug_handle3']
-        obj_data = ObjectData.get_geoms_data(obj_name, {obj_name: obj_filepath}, device=device) \
+        obj_data = EntityData.get_geoms_data(obj_name, {obj_name: obj_filepath}, device=device) \
             if obj_filepath.endswith('.obj') else (
-            ObjectData.get_mj_object_data(obj_name, obj_filepath, body_names=['mug'] if use_mug else None,
+            EntityData.get_mj_entity_data(obj_name, obj_filepath, body_names=['mug'] if use_mug else None,
                                           geom_names=obj_geom_names,
                                           meshdir=str(os.path.join(MJMANIP_OBJECT_MODELS_DIR, obj_name)),
                                           is_collision=bool(obj_geom_names),
@@ -98,4 +100,4 @@ if __name__ == "__main__":
         # Visualize
         vis_grasp = True
         if vis_grasp:
-            hand_opt.visualize_grasp(grasp, obj_data.geom_meshes)
+            hand_opt.visualize_grasp(grasp, obj_data.geom_trimeshes)

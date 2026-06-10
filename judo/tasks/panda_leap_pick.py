@@ -48,9 +48,16 @@ OBJ_COLLISION_GEOM_NAMES = PANDA_LEAP.OBJECT_COLLISION_GEOM_NAMES[OBJ_NAME]
 USE_EE_MPC = False
 EE_DOFS_NO = 6
 PANDA_LEAP.FINGERS_IK_ENABLED = False
-PANDA_LEAP.OBJECT_GRASP_TARGET_SITE_NAME = "mug_handle_center" if OBJ_NAME == 'mug' else OBJ_NAME
-PANDA_LEAP.OBJECT_INIT_POSES["mug"] = np.hstack([np.array([0, 0.7, 0.6]), np.array([0.71, 0., 0., 0.71])])
-
+# NOTE: This home qpos, due to being the initial hand qpos, acts as:
+# - DiffIK: PostureTask's initial target-qpos, (which is then updated following one suggested by `Hand Optimizer`)!
+# - HandOptimizer: Initial condition, as using robot latest qpos, which is highly influenced by the home qpos, as the initial state
+PANDA_LEAP.HAND_HOME_QPOS = [
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0, 0, 0, 0,
+    0.8, 0.8, 0.8, 0,
+]
+PANDA_LEAP.OBJECT_INIT_POSES["mug"] = np.hstack([np.array([0, 0.7, 0.6]), np.array([1, 0., 0., 0.])])
 TABLE_NAME = "table"
 
 
@@ -123,7 +130,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         # for the `initial_state`
         # distance sensors
         self.obj_pos_distance_to_grasp_sensor_idx = self.get_sensor_start_index(
-            f"{PANDA_LEAP.OBJECT_GRASP_TARGET_SITE_NAME}_distance_to_{PANDA_LEAP.full_hand_grasp_site_name()}")
+            f"{PANDA_LEAP.OBJECT_GRASP_TARGET_SITE_NAMES[OBJ_NAME]}_distance_to_{PANDA_LEAP.full_hand_grasp_site_name()}")
         self.obj_pos_distance_to_goal_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_distance_to_goal")
         self.obj_quat_distance_sensor_idx = self.get_sensor_start_index(f"{OBJ_NAME}_orientation_distance_to_goal")
 
@@ -168,9 +175,9 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
 
         # Table
         mj_spec_add_body(spec, TABLE_NAME,
-                         body_pose=[0, 0.7, 0.2, 1, 0, 0, 0],
-                         obj_geom_type=mj.mjtGeom.mjGEOM_BOX,
-                         obj_geom_size=[0.5, 0.3, 0.2],
+                         pose=[0, 0.7, 0.2, 1, 0, 0, 0],
+                         geom_type=mj.mjtGeom.mjGEOM_BOX,
+                         geom_size=[0.5, 0.3, 0.2],
                          free_moving=False)
         for arm_body in PANDA_LEAP.arm_items_full_names(PANDA_LEAP.ARM_BODIES_NAMES):
             spec.add_exclude(bodyname1=arm_body, bodyname2=TABLE_NAME)
@@ -297,7 +304,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
                               np.linalg.norm(obj_grasp_site_pos - grasp_site_pos, axis=2)[..., np.newaxis]
         grasp_direction_cost = (
             # Palm-aimed-toward-object direction
-                5 * np.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1)
+                55 * np.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1)
                 # Palm-face-down direction
                 + 10 * np.square(grasp_direction - obj_grasp_direction).sum(-1).mean(-1)
         )

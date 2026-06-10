@@ -1,11 +1,14 @@
 fabric_params:
   cspace_attractor:
-    min_isotropic_mass: 1.
-    max_isotropic_mass: 1.
-    mass_sharpness: 20.0
-    mass_switch_offset: 1.
-    conical_sharpness: 20.
-    conical_gain: 1.
+    min_isotropic_mass: 8.
+    max_isotropic_mass: 8.
+    mass_sharpness: 20.
+    mass_switch_offset: 0.5
+    conical_sharpness: 40.
+    conical_gain: 50.
+    damping: 50.
+    damping_sharpness: 10.
+    damping_radius: 0.2
   joint_limit_repulsion:
     velocity_gate: True
     breakaway_distance: 0.0
@@ -26,15 +29,15 @@ fabric_params:
     damping_sharpness: 10.
     damping_radius: 0.2
   hand_base_attractor:
-    min_isotropic_mass: 1.
-    max_isotropic_mass: 1.
-    mass_sharpness: 10.
+    min_isotropic_mass: 8.
+    max_isotropic_mass: 8.
+    mass_sharpness: 20.
     mass_switch_offset: 0.5
-    conical_sharpness: 40. # 10. for 12 dim pose attractor
+    conical_sharpness: 40.
     conical_gain: 50.
-    damping: 50. #25. # 50.
-    damping_sharpness: 10. # 20. for the 12 dim pose attractor
-    damping_radius: .2 #1.32 # 1. for 12 dim pose attractor
+    damping: 50.
+    damping_sharpness: 10.
+    damping_radius: 0.2
   body_repulsion:
     max_depth: 2.
     min_depth: 0.01

@@ -1,6 +1,6 @@
 import os
 import time
-from typing import Any, Callable, Optional, Union, Sequence
+from typing import Any, Callable, Optional
 from threading import Lock
 from omegaconf import DictConfig
 from loop_rate_limiters import RateLimiter
@@ -22,11 +22,13 @@ from mujoco import viewer
 
 # mjmanip
 from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
-from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
-from mjmanip.mj_utils import (mj_data_body_geoms, mj_model_joints_qids, mj_model_actuators_id_list, mj_data_move_mocap,
-                              mj_scene_clear, mj_scene_draw_spheres, mj_data_mocap_pose, mj_data_geoms_global_poses,
-                              mj_data_site_pose)
+from mjmanip.entity_utils import EntityData
+from mjmanip.mj_utils import (mj_data_body_geoms, mj_model_joints_qids, mj_model_actuators_id_list,
+                              mj_data_move_mocap, mj_data_mocap_pose,
+                              mj_data_geoms_world_transforms, mj_data_site_pose,
+                              mj_scene_clear, mj_scene_draw_spheres, mj_scene_draw_arrow)
 from mjmanip.pytorch3d_utils import p3d_multiply_poses, p3d_pose_inverse
+from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
 from mjmanip.robot.arm_hand_fabrics import ArmHandWithFabricsEnv
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
@@ -43,15 +45,15 @@ from judo.app.utils import get_class_from_string
 
 # hand optimizer
 from judo.optimizers.hand_optimizers.hand_optimizer import HandOptimizer, HandOptimizerParams, HandParams, HandGrasp
-from judo.optimizers.hand_optimizers.object_utils import ObjectData
 from judo.app.utils import set_seed
 
 RECORD_TIME = 300
 
 
 class MPCApp:
-    USE_DIFF_IK = False
+    USE_DIFF_IK = True
     USE_CURRENT_HAND_BASE_CENTRIC_GRASP = True
+    GRASP_QPOS_THRESHOLD = 0.15 if USE_DIFF_IK else 0.3
 
     def __init__(self, task_name: str,
                  optimizer_name: str,
@@ -156,14 +158,14 @@ class MPCApp:
                 # Object
                 OBJ_BODY_NAMES = [OBJ_NAME]
                 OBJ_GEOM_NAMES = robot_class.OBJECT_GEOM_NAMES[OBJ_NAME]
+                OBJECT_GRASP_GEOM_NAMES = robot_class.OBJECT_GRASP_GEOM_NAMES[OBJ_NAME]
                 self.obj = self.mj_data.body(OBJ_NAME)
                 self.obj_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in OBJ_GEOM_NAMES}
-                self.obj_visual_geom = self.obj_geoms[OBJ_GEOM_NAMES[0]]
-                self.object_data = ObjectData.get_mj_object_data(OBJ_NAME, self.mj_model, self.mj_data, self.mj_spec,
+                obj_meshdir = str(os.path.join(MJMANIP_OBJECT_MODELS_DIR, OBJ_NAME))
+                self.object_data = EntityData.get_mj_entity_data(OBJ_NAME, self.mj_model, self.mj_data, self.mj_spec,
                                                                  body_names=OBJ_BODY_NAMES,
-                                                                 geom_names=OBJ_GEOM_NAMES,
-                                                                 meshdir=str(os.path.join(MJMANIP_OBJECT_MODELS_DIR,
-                                                                                          OBJ_NAME)),
+                                                                 geom_names=OBJECT_GRASP_GEOM_NAMES,
+                                                                 meshdir=obj_meshdir,
                                                                  is_collision=True,
                                                                  merging_meshes=False,
                                                                  npoints_each_geom=10,
@@ -173,12 +175,12 @@ class MPCApp:
                 OBJ_COLLISION_GEOM_NAMES = robot_class.OBJECT_COLLISION_GEOM_NAMES[OBJ_NAME]
                 self.obstacle_geoms = {geom_name: self.mj_data.geom(geom_name) for geom_name in
                                        OBJ_COLLISION_GEOM_NAMES}
-                self.obj_obstacle_data = ObjectData.get_mj_object_data(
+                self.obj_obstacle_data = EntityData.get_mj_entity_data(
                     f"{OBJ_NAME}_obstacles",
                     self.mj_model, self.mj_data, self.mj_spec,
                     body_names=OBJ_BODY_NAMES,
                     geom_names=OBJ_COLLISION_GEOM_NAMES,
-                    meshdir=str(os.path.join(MJMANIP_OBJECT_MODELS_DIR, OBJ_NAME)),
+                    meshdir=obj_meshdir,
                     is_collision=True,
                     merging_meshes=False,
                     npoints_each_geom=10,
@@ -189,7 +191,7 @@ class MPCApp:
                 self.env_bodies = {env_body_name: self.mj_data.body(env_body_name)
                                    for env_body_name in robot_class.ENV_BODY_NAMES}
                 # self.env_body_geoms = mj_data_body_geoms(self.mj_model, self.mj_data, env_body_name)
-                self.env_bodies_data = ObjectData.get_mj_object_data("env_bodies",
+                self.env_bodies_data = EntityData.get_mj_entity_data("env_bodies",
                                                                      self.mj_model,
                                                                      self.mj_data, self.mj_spec,
                                                                      body_names=robot_class.ENV_BODY_NAMES,
@@ -215,15 +217,18 @@ class MPCApp:
                                                       joint_limit_lower=-np.pi / 6,
                                                       joint_limit_upper=np.pi / 6)
                 self.hand_base = self.mj_data.body(robot_class.hand_item_full_name(self.robot_class.HAND_BASE_NAME))
-                # Object-centric (VS hand-base centric) grasp initialization
+
+                # Grasp initialization for the optimization
+                # NOTE: Init joint angles substantially dictate how the optimal grasp progresses and ends
+                init_joint_angles = np.array(self.robot_class.home_qpos())[self.hand_qpos_ids].astype(np.float32)
+                # init_joint_angles = np.zeros_like(init_joint_angles)
                 hand_params = HandParams(hand_model_name=robot_class.HAND_MODEL_NAME,
                                          xml_path=robot_class.HAND_XML_PATH,
-                                         joint_angles=torch.from_numpy(np.array(self.mj_data.qpos[self.hand_qpos_ids],
-                                                                                dtype=np.float32)).to(device).
-                                         unsqueeze(0)) if True \
+                                         joint_angles=torch.tensor(init_joint_angles, device=device).unsqueeze(0)) \
+                    if True \
                     else HandParams.get(hand_model_name=robot_class.HAND_MODEL_NAME,
                                         xml_path=robot_class.HAND_XML_PATH,
-                                        joint_angles=np.array(self.mj_data.qpos[self.hand_qpos_ids], dtype=np.float32),
+                                        joint_angles=init_joint_angles,
                                         hand_pos=self.hand_base.xpos.copy(),
                                         hand_quat_wxyz=self.hand_base.xquat.copy())
                 self.hand_opt = HandOptimizer(mj_data=self.mj_data,
@@ -263,6 +268,9 @@ class MPCApp:
             self.fabrics_env.init()
             self.fabrics_robot = self.fabrics_env.robots_system
             self.fabrics_controller = self.fabrics_env.fabrics_controller
+            # NOTE THAT:
+            # self.fabrics_controller.mj_model/mj_data == self.fabrics_robot.main_model/main_data
+            # BUT != self.mj_model/mj_data
 
     @property
     def is_mujoco(self):
@@ -385,20 +393,21 @@ class MPCApp:
         # Update [hand_opt]'s opt-wrist-pose to hand-base
         assert self.is_mujoco
         cur_arm_qpos = torch.tensor(self.mj_data.qpos[self.arm_qpos_ids], dtype=torch.float32, device=self.device)
-        cur_hand_pos = torch.tensor(self.hand_base.xpos, dtype=torch.float32, device=self.device)
-        cur_hand_quat_wxyz = torch.tensor(self.hand_base.xquat, dtype=torch.float32, device=self.device)
-        cur_wrist_rot = cur_hand_quat_wxyz if self.hand_opt.use_quat \
-            else roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(cur_hand_quat_wxyz))
+        # cur_hand_qpos = torch.tensor(self.mj_data.qpos[self.hand_qpos_ids], dtype=torch.float32, device=self.device)
+        cur_wrist_pos = torch.tensor(self.hand_base.xpos, dtype=torch.float32, device=self.device)
+        cur_wrist_quat_wxyz = torch.tensor(self.hand_base.xquat, dtype=torch.float32, device=self.device)
+        cur_wrist_rot = cur_wrist_quat_wxyz if self.hand_opt.use_quat \
+            else roma.unitquat_to_rotmat(roma.quat_wxyz_to_xyzw(cur_wrist_quat_wxyz))
         cur_joint_angles = torch.tensor(self.mj_data.qpos[self.hand_qpos_ids], dtype=torch.float32,
                                         device=self.device)
 
         grasp_pos = grasp_quat_wxyz = None
         if self.is_last_plan_by_mpc:
-            print("BACK TO MPC")
+            print("BACK TO HAND OPTIMIZING FROM MPC")
             assert self.hand_opt.use_quat, "Only quat-based grasp is supported!"
             if self.USE_CURRENT_HAND_BASE_CENTRIC_GRASP:
-                grasp_pos = cur_hand_pos.unsqueeze(0)
-                grasp_quat_wxyz = cur_hand_quat_wxyz.unsqueeze(0)
+                grasp_pos = cur_wrist_pos.unsqueeze(0)
+                grasp_quat_wxyz = cur_wrist_quat_wxyz.unsqueeze(0)
                 # joint_angles = cur_joint_angles.unsqueeze(0)
             else:
                 if False:
@@ -429,59 +438,63 @@ class MPCApp:
                 # NOTE: Do not update [opt_joint_angles] here-in!
                 self.hand_opt.update_opt_params(wrist_pos=grasp_pos, wrist_rot_wxyz=grasp_quat_wxyz)
 
-        # if self.hand_opt.cur_loss > self.hand_opt.LOSS_MIN_THRESHOLD:
+        # if self.hand_opt.cur_loss > self.hand_opt.TOTAL_LOSS_MIN_THRESHOLD:
         if True:
             hand_batches_num = self.hand_opt.nbatches
             assert hand_batches_num == 1
             dist = None
             if self.next_grasp:
-                dist = self.next_grasp.distance_from(HandGrasp(base_pos=cur_hand_pos,
-                                                               base_quat_wxyz=cur_hand_quat_wxyz,
+                dist = self.next_grasp.distance_from(HandGrasp(base_pos=cur_wrist_pos,
+                                                               base_quat_wxyz=cur_wrist_quat_wxyz,
                                                                joint_angles=cur_joint_angles))
-            grasp_optimizing = (dist is not None) and dist < 0.15
+            grasp_optimizing = (dist is not None) and (dist < self.GRASP_QPOS_THRESHOLD)
             if not dist or grasp_optimizing:
+                # NOTE: Check MPC `Task, eg PandaLeapPick.reward()`'s `grasp_direction_cost` if these `cur_wrist_pos/rot` are not
+                # optimal, ideal yet as the initial state to start hand-grasp optimizing!
                 self.next_grasp = self.hand_opt.step_optimize(
-                    cur_wrist_pos=cur_hand_pos.repeat(hand_batches_num, 1),
+                    cur_wrist_pos=cur_wrist_pos.repeat(hand_batches_num, 1),
                     cur_wrist_rot=cur_wrist_rot.repeat(hand_batches_num, 1),
                     cur_joint_angles=cur_joint_angles.repeat(hand_batches_num, 1))
                 print("LOSS", self.hand_opt.cur_loss, dist, "MPC disabled", self.sim.task.mpc_disabled)
                 if (dist is not None) and dist < 0.075:
                     grasp_optimizing = False
                     self.sim.task.desired_hand_qpos = self.next_grasp.joint_angles.cpu().numpy()
-            # print("grasp_optimizing", grasp_optimizing)
-            self.sim.task.mpc_disabled = (self.hand_opt.cur_loss > self.hand_opt.LOSS_MIN_THRESHOLD
+                # print("grasp_optimizing", grasp_optimizing)
+            self.sim.task.mpc_disabled = (self.hand_opt.cur_loss > self.hand_opt.TOTAL_LOSS_MIN_THRESHOLD
                                           or grasp_optimizing)
 
         # Arm plan
         next_grasp_pose_wxyz = self.next_grasp.base_pose_wxyz
+        next_grasp_joint_angles = self.next_grasp.joint_angles
         mj_data_move_mocap(self.mj_model, self.mj_data, self.robot_class.EE_TARGET_MOCAP_NAME,
                            pos=self.next_grasp.base_pos.cpu().numpy(),
                            quat=self.next_grasp.base_quat_wxyz.cpu().numpy())
-        next_grasp_joint_angles = self.next_grasp.joint_angles.cpu().numpy()
+
+        # Use [DIFF_IK] to guide [FABRICS]
         if self.USE_DIFF_IK:
             # NOTE: [self.diff_ik.data] != self.mj_data
-            next_grasp_pose_wxyz = next_grasp_pose_wxyz.cpu().numpy()
-            target_ee_poses = {self.diff_ik.main_ee_name: next_grasp_pose_wxyz}
+            target_ee_poses = {self.diff_ik.main_ee_name: next_grasp_pose_wxyz.cpu().numpy()}
             if self.robot_class.FINGERS_IK_ENABLED:
                 for ftip_name in self.robot_class.FINGER_TIPS_NAMES:
                     # NOTE: [self.hand_opt.hand_layer.mj_data] is hand only, so using plain [ftip_name] directly!
                     target_ee_poses[self.robot_class.hand_item_full_name(ftip_name)] = (
                         mj_data_site_pose(self.hand_opt.hand_layer.mj_data, ftip_name, as_single_array=True))
             else:
-                self.diff_ik.posture_task.target_q[self.hand_qpos_ids] = next_grasp_joint_angles
+                self.diff_ik.posture_task.target_q[self.hand_qpos_ids] = next_grasp_joint_angles.cpu().numpy()
             q = self.diff_ik.plan(target_ee_poses=target_ee_poses, use_solver=True)
             if q is None:
                 q = self.diff_ik.plan(target_ee_poses=target_ee_poses, use_solver=False)
         else:
-            obj_geom_quat = np.zeros(4)
-            mj.mju_mat2Quat(obj_geom_quat, self.obj_visual_geom.xmat)
-            # cur_obj_poses = {
-            #   self.object_data.obj_name: np.concat([self.obj_visual_geom.xpos, obj_geom_quat])}
             self.fabrics_controller.step(
-                new_qpos_target=torch.cat([cur_arm_qpos, torch.as_tensor(self.next_grasp.joint_angles)]),
-                new_hand_base_target=torch.as_tensor(next_grasp_pose_wxyz),
-                new_finger_targets=self.hand_opt.hand_layer.fingertip_fabric_poses)
+                new_qpos_target=torch.cat([cur_arm_qpos, next_grasp_joint_angles]),
+                new_hand_base_target=next_grasp_pose_wxyz,
+                new_finger_targets=self.hand_opt.hand_layer.fingertip_fabric_poses,
+                # NOTE: [cur_obj_poses] must be provided here since [fabrics_env]'s model/data is not the same as
+                # [self.mj_model/mj_data] & also not stepped!
+                cur_obj_poses={self.object_data.obj_name: np.concat([self.obj.xpos, self.obj.xquat])}
+            )
             q = self.fabrics_controller.q_prev.detach().cpu().numpy().squeeze()
+
         self.mj_robot_ctrl[self.arm_ctrl_ids] = q[self.arm_qpos_ids]
         self.mj_robot_ctrl[self.hand_ctrl_ids] = q[self.hand_qpos_ids]
 
@@ -489,7 +502,7 @@ class MPCApp:
         #
         # - Next grasp
         if False:
-            self.hand_opt.visualize_grasp(self.next_grasp, self.object_data.geom_meshes)
+            self.hand_opt.visualize_grasp(self.next_grasp, self.object_data.geom_trimeshes)
 
         # - Fabrics
         if not self.USE_DIFF_IK and self.fabrics_controller and self.is_mujoco:
@@ -567,6 +580,14 @@ class MPCApp:
         mj_scene_draw_spheres(mj_scene, positions=points,
                               sizes=npoints * [size], rgbas=npoints * [color])
 
+    @classmethod
+    def _draw_arrows(cls, mj_scene: mj.MjvScene, starts: npt.ArrayLike, ends: npt.ArrayLike, radius: float = 0.01,
+                     color: npt.ArrayLike = (0.2, 0.2, 0.6, 1)):
+        if isinstance(starts, np.ndarray):
+            assert len(starts.shape) == 2
+        for i in range(len(starts)):
+            mj_scene_draw_arrow(mj_scene, starts[i], ends[i], radius=radius, rgba=color)
+
     def visualize_optimized_hand_pcl(self):
         if self.is_mujoco:
             mj_user_scn = self.sim.mj_viewer.user_scn
@@ -576,6 +597,8 @@ class MPCApp:
             if self.hand_opt.hand_anchors is not None:
                 hand_anchors = self.hand_opt.hand_anchors.squeeze().detach().cpu().numpy()
                 self._draw_points(mj_user_scn, hand_anchors, size=[0.01], color=[1, 0, 0, 1])
+                # self._draw_arrows(mj_user_scn, hand_anchors, hand_anchors +
+                #                  0.1 * self.hand_opt.hand_anchors_normals.squeeze().detach().cpu().numpy())
 
             # Grasp site
             if self.hand_opt.hand_visual_grasp_site_pos is not None:
@@ -592,23 +615,34 @@ class MPCApp:
 
     def visualize_obj_pcl(self):
         if self.is_mujoco:
-            obj_points = self.hand_opt.object_data.all_points.detach().cpu().numpy().tolist()
+            obj_points = self.hand_opt.object_data.all_points.detach().cpu().numpy()
             mj_scene_draw_spheres(self.sim.mj_viewer.user_scn,
                                   positions=obj_points,
                                   sizes=len(obj_points) * [[0.005]],
                                   rgbas=len(obj_points) * [[0, 1, 0, 1]])
+            if False:
+                obj_points_normals = 0.1 * self.object_data.all_normals.detach().cpu().numpy()
+                for i in range(len(obj_points)):
+                    mj_scene_draw_arrow(self.sim.mj_viewer.user_scn, obj_points[i],
+                                        obj_points[i] + obj_points_normals[i], radius=0.01)
 
-            if True:
-                object_dense_pcl = self.hand_opt.object_global_dense_pcl.tolist()
+                obj_center = self.hand_opt.object_data.all_points.mean(dim=0).detach().cpu().numpy()
                 mj_scene_draw_spheres(self.sim.mj_viewer.user_scn,
-                                      positions=object_dense_pcl,
-                                      sizes=len(object_dense_pcl) * [[0.005]],
-                                      rgbas=len(object_dense_pcl) * [[1, 0, 0, 1]])
+                                      positions=[obj_center],
+                                      sizes=[[0.03]],
+                                      rgbas=[[1, 1, 0, 1]])
 
             if False:
-                obj_obstacle_pts = np.concat(
-                    [obst.all_points.detach().cpu().numpy() for obst in self.hand_opt.obstacles_data]).tolist()
+                obj_dense_pcl = self.hand_opt.object_global_dense_pcl.tolist()
                 mj_scene_draw_spheres(self.sim.mj_viewer.user_scn,
-                                      positions=obj_obst_points,
-                                      sizes=len(obj_obst_points) * [[0.005]],
-                                      rgbas=len(obj_obst_points) * [[1, 0, 0, 1]])
+                                      positions=obj_dense_pcl,
+                                      sizes=len(obj_dense_pcl) * [[0.005]],
+                                      rgbas=len(obj_dense_pcl) * [[1, 0, 0, 1]])
+
+            if False:
+                obj_obstacle_pts = np.concat([obst.all_points.detach().cpu().numpy()
+                                              for obst in self.hand_opt.obstacles_data])
+                mj_scene_draw_spheres(self.sim.mj_viewer.user_scn,
+                                      positions=obj_obstacle_pts,
+                                      sizes=len(obj_obstacle_pts) * [[0.005]],
+                                      rgbas=len(obj_obstacle_pts) * [[1, 0, 0, 1]])

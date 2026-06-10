@@ -235,7 +235,7 @@ class LeapHandLayer(torch.nn.Module):
                 if geom_spec is None:
                     continue
 
-                # 1- Load [geom_mesh], saving it to [self.geom_meshes]
+                # 1- Load [geom_mesh], saving it to [self.geom_trimeshes]
                 geom_mesh = mj_spec_geom_to_trimesh(self.mj_spec, geom_spec)
                 if not geom_mesh:
                     continue
