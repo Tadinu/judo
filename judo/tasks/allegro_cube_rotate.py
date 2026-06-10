@@ -112,7 +112,7 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
         for i in range(model_builder.joint_dof_count):
             model_builder.joint_target_ke[i] = 150
             model_builder.joint_target_kd[i] = 5
-            model_builder.joint_target_pos[i] = 0.0
+            model_builder.joint_target_q[i] = 0.0
 
     def nt_get_obj_pose(self, state: newton.State, in_sim: bool) -> np.ndarray:
         num_worlds = 1 if in_sim else self.nt_num_rollout_worlds

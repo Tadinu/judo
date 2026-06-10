@@ -20,11 +20,14 @@ import trimesh
 from tqdm import tqdm
 
 import mujoco as mj
+
 # judo
-from judo.optimizers.hand_optimizers.object_utils import ObjectData
 from judo.optimizers.hand_optimizers.loss_utils import point2point_signed
 from judo.optimizers.hand_optimizers.rot6d import (robust_compute_rotation_matrix_from_ortho6d,
                                                    compute_rotation_ortho6d_from_matrix)
+
+# mjmanip
+from mjmanip.entity_utils import EntityData
 
 USE_MUJOCO_HAND_LAYER = True
 USE_NEWTON_HAND_LAYER = False and not USE_MUJOCO_HAND_LAYER
@@ -37,7 +40,7 @@ else:
 from judo.hand_layers.leap_layer import LeapAnchor
 
 # mjmanip
-from mjmanip.mj_utils import mj_data_geoms_global_poses
+from mjmanip.mj_utils import mj_data_geoms_world_transforms
 from mjmanip.trimesh_utils import mj_get_body_trimeshes, trimesh_sample_geoms_surface_torch
 from mjmanip.pytorch3d_utils import (p3d_transform_points, p3d_stable_angle_between_vectors,
                                      mjw_geoms_to_pytorch3d_meshes, p3d_to_trimesh)
@@ -193,7 +196,7 @@ class HandGrasp:
 class HandOptimizer(torch.nn.Module):
     """Custom Pytorch model for gradient-base grasp optimization.
     """
-    LOSS_MIN_THRESHOLD: float = 600
+    TOTAL_LOSS_MIN_THRESHOLD: float = 300  # NOTE: Decreasing this will induce more tight hand closure/caging!
     USE_ADAMW: bool = True
 
     def float_torch_tensor(self, x: np.ndarray) -> torch.Tensor:
@@ -201,8 +204,8 @@ class HandOptimizer(torch.nn.Module):
 
     def __init__(self, hand_params: HandParams,
                  mj_data: Optional[mj.MjData] = None,
-                 object_data: Optional[ObjectData] = None,
-                 obstacles_data: Optional[list[ObjectData]] = None,
+                 object_data: Optional[EntityData] = None,
+                 obstacles_data: Optional[list[EntityData]] = None,
                  to_mano_frame: bool = False,
                  opt_params: Optional[HandOptimizerParams] = None,
                  apply_force_closure: bool = True,
@@ -214,7 +217,7 @@ class HandOptimizer(torch.nn.Module):
         self.nbatches = opt_params.nbatches if opt_params else 1
         # Note: Force closure loss does not play much help in our observation!!!
         self.apply_force_closure = apply_force_closure
-        self.cur_loss = self.LOSS_MIN_THRESHOLD + 1
+        self.cur_loss = self.TOTAL_LOSS_MIN_THRESHOLD + 1
         self.min_loss = 1e8
         self.perfect_relative_grasp: HandGrasp = None  # The best grasp (relative to object)
 
@@ -403,23 +406,23 @@ class HandOptimizer(torch.nn.Module):
         # NOTE: Original object geom points are always local in their own geom frames as originally loaded from CADs!
         if self.object_dense_pcl is None:
             self.object_dense_pcl, self.object_pt_normals, self.object_farthest_pts = (
-                trimesh_sample_geoms_surface_torch(self.object_data.geom_meshes))
+                trimesh_sample_geoms_surface_torch(self.object_data.geom_trimeshes))
 
         # Transform [self.object_dense_pcl, pt_normals, farthers_pts] to global frame
         obj_dense_pcl = torch.empty((0, 3), dtype=torch.float32, device=self.device)
         obj_farthest_pts = torch.empty_like(obj_dense_pcl)
         obj_pt_normals = torch.empty_like(obj_dense_pcl)
-        obj_geom_global_poses = mj_data_geoms_global_poses(self.mj_data,
-                                                           self.object_data.geom_meshes.keys()) if self.mj_data else None
-        if obj_geom_global_poses is not None:
-            for obj_geom_name, obj_geom_gb_pose in {k: torch.tensor(v, dtype=torch.float32, device=self.device)
-                                                    for k, v in obj_geom_global_poses.items()}.items():
+        obj_geom_global_tfs = mj_data_geoms_world_transforms(self.mj_data,
+                                                             self.object_data.geom_trimeshes.keys()) if self.mj_data else None
+        if obj_geom_global_tfs is not None:
+            for obj_geom_name, obj_geom_gb_tf in {k: torch.tensor(v, dtype=torch.float32, device=self.device)
+                                                  for k, v in obj_geom_global_tfs.items()}.items():
                 obj_dense_pcl = torch.cat([obj_dense_pcl,
-                                           p3d_transform_points(self.object_dense_pcl, obj_geom_gb_pose)])
+                                           p3d_transform_points(self.object_dense_pcl, obj_geom_gb_tf)])
                 obj_farthest_pts = torch.cat([obj_farthest_pts,
-                                              p3d_transform_points(self.object_farthest_pts, obj_geom_gb_pose)])
+                                              p3d_transform_points(self.object_farthest_pts, obj_geom_gb_tf)])
                 obj_pt_normals = torch.cat([obj_pt_normals,
-                                            p3d_transform_points(self.object_pt_normals, obj_geom_gb_pose[:3, :3])])
+                                            p3d_transform_points(self.object_pt_normals, obj_geom_gb_tf[:3, :3])])
         else:
             obj_dense_pcl = self.object_dense_pcl
             obj_farthest_pts = self.object_farthest_pts
@@ -615,7 +618,7 @@ class HandOptimizer(torch.nn.Module):
             if joint_angles is not None:
                 self.opt_joint_angles.copy_(joint_angles)
 
-    def forward(self, obstacles: Optional[list[ObjectData]] = None):
+    def forward(self, obstacles: Optional[list[EntityData]] = None):
         """
         Implement loss function
         """
@@ -920,7 +923,7 @@ class HandOptimizer(torch.nn.Module):
 
         # Save [best_grasp] as [perfect_grasp] if qualified
         best_grasp = self.best_grasp_configuration(save_real=False)
-        if self.cur_loss < self.LOSS_MIN_THRESHOLD:
+        if self.cur_loss < self.TOTAL_LOSS_MIN_THRESHOLD:
             best_relative_grasp = (self.object_data.get_object_pose(self.mj_data).inverse() @
                                    best_grasp.base_mat)
             self.perfect_relative_grasp = HandGrasp(base_pos=best_relative_grasp[:3, 3],

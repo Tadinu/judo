@@ -48,7 +48,7 @@ def nt_copy_control(target: newton.Control, source: newton.Control) -> None:
     Raises:
         ValueError: If the controls have mismatched attributes (one has an array where the other is None).
     """
-    with wp.ScopedDevice(source.joint_target_pos.device):
+    with wp.ScopedDevice(source.joint_target_q.device):
         nt_copy_struct(target, source)
 
 
@@ -186,7 +186,7 @@ class NewtonBackend:
                     self.world_time,
                     self.sim_dt,
                 ],
-                outputs=[self.model_ctrl.joint_target_pos, self.model.joint_X_p],
+                outputs=[self.model_ctrl.joint_target_q, self.model.joint_X_p],
             )
 
     def _step_simulation(self) -> None:
@@ -209,7 +209,7 @@ class NewtonBackend:
                           idx=i)
 
             # update the solver since we have updated the joint parent transforms
-            self.solver.notify_model_changed(newton.solvers.SolverNotifyFlags.JOINT_PROPERTIES)
+            self.solver.notify_model_changed(newton.ModelFlags.JOINT_PROPERTIES)
 
             # Contacts
             self.solver.step(self.state_0, self.state_1, self.model_ctrl, self.contacts, self.sim_dt)

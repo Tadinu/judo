@@ -361,9 +361,9 @@ class MPController:
                 # [self.rollout_controls] -> [self.nt_rollout_backend.rollout_model_ctrls' joint_target_pos]
                 for i in range(len(self.nt_rollout_backend.rollout_model_ctrls)):
                     control = self.nt_rollout_backend.rollout_model_ctrls[i]
-                    control.joint_target_pos = wp.array(np.hstack(self.rollout_controls[:, i, :].squeeze()),
-                                                        dtype=control.joint_target_pos.dtype,
-                                                        device=control.joint_target_pos.device)
+                    control.joint_target_q = wp.array(np.hstack(self.rollout_controls[:, i, :].squeeze()),
+                                                      dtype=control.joint_target_q.dtype,
+                                                      device=control.joint_target_q.device)
 
                 # Rollout backend with updated [joint_target_controls]
                 self.nt_rollout_backend.step()
