@@ -88,7 +88,7 @@ def set_default_leap_cube_overrides() -> None:
         CrossEntropyMethodConfig,
         {
             "num_nodes": 4,
-            "num_rollouts": 32,
+            "num_rollouts": 64 if AllegroCubeRotateConfig().is_backend_mujoco() else 32,
             "num_elites": 3,
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
@@ -202,10 +202,12 @@ def set_default_allegro_cube_overrides() -> None:
         CrossEntropyMethodConfig,
         {
             "num_nodes": 4,
-            "num_rollouts": 128 if AllegroCubeRotateConfig().is_backend_mujoco() else 32,
+            "num_rollouts": 64 if AllegroCubeRotateConfig().is_backend_mujoco() else 32,
             "num_elites": 5,
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
+            # "sigma_min": 0.01,
+            # "sigma_max": 0.3,
         },
     )
     set_config_overrides(
@@ -282,6 +284,8 @@ def set_default_leap_object_rotate_overrides() -> None:
             "num_elites": 5,
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
+            # "sigma_min": 0.2,
+            # "sigma_max": 0.3,
         },
     )
     set_config_overrides(
@@ -434,7 +438,7 @@ def set_default_triple_pandas_rotate_overrides() -> None:
         CrossEntropyMethodConfig,
         {
             "num_nodes": 4,
-            "num_rollouts": 128,
+            "num_rollouts": 64,
             "num_elites": 5,
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
@@ -448,9 +452,9 @@ def set_default_triple_pandas_rotate_overrides() -> None:
         {
             "num_nodes": 4,
             "num_rollouts": 128,
-            "use_noise_ramp": True,
+            "use_noise_ramp": False,
             "noise_ramp": 4.0,
-            "sigma": 0.2,
+            "sigma": 0.05,
             "temperature": 0.0025,
         },
     )

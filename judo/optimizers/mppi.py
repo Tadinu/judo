@@ -4,6 +4,7 @@ from typing import Optional
 from dataclasses import dataclass
 
 import numpy as np
+import torch
 
 from judo.gui import slider
 from judo.optimizers.base import Optimizer, OptimizerConfig
@@ -36,7 +37,7 @@ class MPPI(Optimizer[MPPIConfig]):
         """Get the temperature value."""
         return self.config.temperature
 
-    def sample_control_knots(self, nominal_knots: np.ndarray) -> np.ndarray:
+    def sample_control_knots(self, nominal_knots: torch.Tensor) -> torch.Tensor:
         """Samples control knots given a nominal control input.
 
         MPPI adds fixed Gaussian noise to the nominal control input.
@@ -52,14 +53,14 @@ class MPPI(Optimizer[MPPIConfig]):
         _sigma = self.sigma
 
         if self.use_noise_ramp:
-            ramp = self.noise_ramp * np.linspace(1 / num_nodes, 1, num_nodes, endpoint=True)[:, None]
+            ramp = self.noise_ramp * torch.linspace(1 / num_nodes, 1, num_nodes)[:, None]
             sigma = ramp * _sigma
         else:
             sigma = _sigma
-        noised_knots = nominal_knots + sigma * np.random.randn(num_rollouts - 1, num_nodes, self.nu)
-        return np.concatenate([nominal_knots[None], noised_knots])
+        noised_knots = nominal_knots + sigma * torch.randn(num_rollouts - 1, num_nodes, self.nu)
+        return torch.concatenate([nominal_knots[None], noised_knots])
 
-    def update_nominal_knots(self, sampled_knots: np.ndarray, rewards: np.ndarray) -> np.ndarray:
+    def update_nominal_knots(self, sampled_knots: torch.Tensor, rewards: torch.Tensor) -> torch.Tensor:
         """Update the nominal control knots based on the sampled controls and rewards.
 
         MPPI uses a weighted average of the sampled controls based on the rewards.
@@ -75,9 +76,9 @@ class MPPI(Optimizer[MPPIConfig]):
         # We can imagine sigma = 0, phi(x_t) = 0 for our MPPI implementation
         # https://homes.cs.washington.edu/~bboots/files/InformationTheoreticMPC.pdf
         costs = -rewards
-        beta = np.min(costs)
+        beta = torch.min(costs)
 
-        _weights = np.exp(-(costs - beta) / self.temperature)
-        weights = _weights / np.sum(_weights)
-        nominal_knots = np.sum(weights[:, None, None] * sampled_knots, axis=0)
+        _weights = torch.exp(-(costs - beta) / self.temperature)
+        weights = _weights / torch.sum(_weights)
+        nominal_knots = torch.sum(weights[:, None, None] * sampled_knots, dim=0)
         return nominal_knots

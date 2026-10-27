@@ -131,7 +131,7 @@ def torch_quat_inv(u: torch.Tensor) -> torch.Tensor:
     Returns:
         result: quat in wxyz order. Shape=(*u_dims, 4).
     """
-    return u * torch.tensor([1, -1, -1, -1], dtype=u.dtype)
+    return u * torch.tensor([1, -1, -1, -1], device=u.device, dtype=u.dtype)
 
 
 def np_quat_mul(u: np.ndarray, v: np.ndarray) -> np.ndarray:

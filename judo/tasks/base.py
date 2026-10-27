@@ -26,8 +26,10 @@ if TYPE_CHECKING:
     from judo.simulation.base import Simulation
 
 # mjmanip
+from mjmanip import MJMANIP_DEVICE
 from mjmanip.robot.arm_hand import ArmHand, ArmHandEnv
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
+from mjmanip.mj_utils import mj_model_joints_qids, mj_model_actuators_id_list
 
 
 @dataclass
@@ -35,18 +37,19 @@ class TaskConfig:
     """Base task configuration dataclass."""
     sim_backend: str = BackendType.MUJOCO_WARP.name
     task_name: str = ""
-    xml_path: Optional[Union[Path, str]] = None
-    sim_xml_path: Optional[Union[Path, str]] = None
-    usd_path: Optional[Union[Path, str]] = None
+    xml_path: Optional[Union[Path, str]] = str()
+    sim_xml_path: Optional[Union[Path, str]] = str()
+    usd_path: Optional[Union[Path, str]] = str()
     robot_class: Optional[ArmHand] = None
     qpos_home: Optional[np.ndarray] = None
     joint_names: Optional[list[str]] = field(default_factory=list)
-    total_joint_q_size: int = 0
-    total_joint_dq_size: int = 0
-    total_body_q_size: int = 0
-    total_body_qd_size: int = 0
-    total_body_f_size: int = 0
-    fabric_env_world_file_name: Optional[str] = None
+    act_names: Optional[list[str]] = field(default_factory=list)
+    nt_total_joint_q_size: int = 0
+    nt_total_joint_dq_size: int = 0
+    nt_total_body_q_size: int = 0
+    nt_total_body_qd_size: int = 0
+    nt_total_body_f_size: int = 0
+    fabric_env_world_file_name: Optional[str] = str()
 
     def sim_backend_type(self) -> BackendType:
         return BackendType[self.sim_backend]
@@ -72,6 +75,7 @@ class Task(ABC, Generic[ConfigT]):
                  num_rollout_worlds: int = 1) -> None:
         """Initialize the task."""
         self.sim = sim
+        self.device = MJMANIP_DEVICE
         self.config = self.config_t()
         backend_type = self.config.sim_backend_type()
         self.num_rollout_worlds = num_rollout_worlds
@@ -88,17 +92,28 @@ class Task(ABC, Generic[ConfigT]):
         self.mj_sim_model = mj.MjModel.from_xml_path(str(self.config.sim_xml_path)) if self.config.sim_xml_path \
             else self.mj_model
 
+        self.qpos_ids = mj_model_joints_qids(self.mj_model, self.config.joint_names,
+                                             is_qpos=True) if self.mj_model else None
+        self.qdof_ids = mj_model_joints_qids(self.mj_model, self.config.joint_names,
+                                             is_qpos=False) if self.mj_model else None
+        self.ctrl_ids = mj_model_actuators_id_list(self.mj_model, self.config.act_names) if self.mj_model else None
+
         # MuJoCo Warp
-        self.mjw_model: mjw.Model = mjw.put_model(self.mj_model) if (backend_type == BackendType.MUJOCO_WARP) else None
-        if self.mjw_model:
-            self.mjw_model.opt.warn_overflow = 0
-        self.mjw_data: mjw.Data = self.mjw_init_data(num_rollout_worlds) if self.mjw_model else None
+        with wp.ScopedDevice(MJMANIP_DEVICE):
+            self.mjw_model: mjw.Model = mjw.put_model(self.mj_model) if (backend_type == BackendType.MUJOCO_WARP) \
+                else None
+            if self.mjw_model:
+                self.mjw_model.opt.warn_overflow = 0
+            self.mjw_data: mjw.Data = self.mjw_init_data(num_rollout_worlds) if self.mjw_model else None
 
         # MuJoCo state type
-        self.mj_state_type = (
-            mj.mjtState.mjSTATE_FULLPHYSICS if (self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY and not self.mjw_model)
-            else (mj.mjtState.mjSTATE_TIME | mj.mjtState.mjSTATE_QPOS | mj.mjtState.mjSTATE_QVEL
-                  | mj.mjtState.mjSTATE_MOCAP_POS | mj.mjtState.mjSTATE_MOCAP_QUAT))
+        if False:
+            self.mj_state_type = mj.mjtState.mjSTATE_FULLPHYSICS
+        else:
+            self.mj_state_type = (
+                mj.mjtState.mjSTATE_FULLPHYSICS if (self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY and not self.mjw_model)
+                else (mj.mjtState.mjSTATE_TIME | mj.mjtState.mjSTATE_QPOS | mj.mjtState.mjSTATE_QVEL
+                      | mj.mjtState.mjSTATE_MOCAP_POS | mj.mjtState.mjSTATE_MOCAP_QUAT))
 
         # Newton models (sim + rollout)
         self.usd_path = self.config.usd_path
@@ -139,16 +154,17 @@ class Task(ABC, Generic[ConfigT]):
         pass
 
     def mjw_init_data(self, num_rollout_worlds: int) -> mjw.Data:
-        self.mjw_data = mjw.put_data(self.mj_model, self.mj_data, nworld=num_rollout_worlds,
-                                     njmax=250)
-        return self.mjw_data
+        with wp.ScopedDevice(MJMANIP_DEVICE):
+            self.mjw_data = mjw.put_data(self.mj_model, self.mj_data, nworld=num_rollout_worlds,
+                                         njmax=250)
+            return self.mjw_data
 
     def nt_init_models(self, num_rollout_worlds: int = 1, init_pose: wp.transform = wp.transform_identity()):
         self.num_rollout_worlds = num_rollout_worlds
         if not self.nt_sim_model_builder:
             self.nt_sim_model_builder = self.nt_create_sim_model_builder(init_pose)
             self.nt_sim_model_builder.add_ground_plane()
-            self.nt_sim_model = self.nt_sim_model_builder.finalize(device='cuda')
+            self.nt_sim_model = self.nt_sim_model_builder.finalize(device=self.device)
 
         # Finalize models
         if num_rollout_worlds > 1:
@@ -162,7 +178,7 @@ class Task(ABC, Generic[ConfigT]):
             self.nt_rollout_model_builder.default_shape_cfg.kd = 1.0e2
             # NOTE: Rollout model must be pure replications of sim model, -> NOT add ground here!
             # self.nt_rollout_model_builder.add_ground_plane()
-            self.nt_rollout_model = self.nt_rollout_model_builder.finalize(device='cuda')
+            self.nt_rollout_model = self.nt_rollout_model_builder.finalize(device=self.device)
         else:
             self.nt_rollout_model_builder = self.nt_sim_model_builder
             self.nt_rollout_model = self.nt_sim_model
@@ -178,8 +194,10 @@ class Task(ABC, Generic[ConfigT]):
         newton.solvers.SolverMuJoCo.register_custom_attributes(sim_model_builder)
         if self.usd_path.endswith(".usd") or self.usd_path.endswith(".usda"):
             sim_model_builder.add_usd(self.usd_path, xform=init_pose, enable_self_collisions=True)
-        elif self.usd_path.endswith(".xml"):
-            sim_model_builder.add_mjcf(self.usd_path, xform=init_pose, verbose=True)
+        else:
+            xml_path = self.usd_path if self.usd_path.endswith(".xml") else self.config.xml_path
+            assert xml_path
+            sim_model_builder.add_mjcf(xml_path, xform=init_pose, verbose=True)
         # Configure model builders
         self.nt_configure_custom_model_builder(sim_model_builder)
         return sim_model_builder
@@ -188,11 +206,11 @@ class Task(ABC, Generic[ConfigT]):
         pass
 
     def nt_init_sim_to_rollout_copy_functions(self):
-        self.nt_kernel_tile_joint_q = wp_create_kernel_tile_array(self.config.total_joint_q_size)
-        self.nt_kernel_tile_joint_qd = wp_create_kernel_tile_array(self.config.total_joint_dq_size)
-        self.nt_kernel_tile_body_q = wp_create_kernel_tile_array(self.config.total_body_q_size)
-        self.nt_kernel_tile_body_qd = wp_create_kernel_tile_array(self.config.total_body_qd_size)
-        self.nt_kernel_tile_body_f = wp_create_kernel_tile_array(self.config.total_body_f_size)
+        self.nt_kernel_tile_joint_q = wp_create_kernel_tile_array(self.config.nt_total_joint_q_size)
+        self.nt_kernel_tile_joint_qd = wp_create_kernel_tile_array(self.config.nt_total_joint_dq_size)
+        self.nt_kernel_tile_body_q = wp_create_kernel_tile_array(self.config.nt_total_body_q_size)
+        self.nt_kernel_tile_body_qd = wp_create_kernel_tile_array(self.config.nt_total_body_qd_size)
+        self.nt_kernel_tile_body_f = wp_create_kernel_tile_array(self.config.nt_total_body_f_size)
 
     def nt_copy_sim_to_rollout_state(self, sim_state: newton.State, rollout_state: newton.State):
         wp.launch_tiled(self.nt_kernel_tile_joint_q, dim=(self.num_rollout_worlds,),
@@ -389,7 +407,10 @@ class Task(ABC, Generic[ConfigT]):
         Args:
             sensor_name: The name of the sensor to get the index of.
         """
-        return self.mj_model.sensor(sensor_name).adr[0]
+        sensor = self.mj_model.sensor(sensor_name)
+        start_adr = sensor.adr[0]
+        # sensordata_view = mjw_data.sensordata[:, start_adr: start_adr + sensor.dim[0]]
+        return start_adr
 
     def get_joint_position_start_index(self, joint_name: str) -> int:
         """Returns the starting index of a joint's position in the 'states' array given the joint's name.

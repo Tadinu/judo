@@ -1,4 +1,5 @@
 from typing import Any
+from pathlib import Path
 
 import numpy as np
 import newton
@@ -118,17 +119,25 @@ class NewtonBackend:
         self.world_time = wp.zeros(model_builder.world_count, dtype=wp.float32)
 
         # Joint ids
-        joints_num = model_builder.joint_count // model_builder.world_count
-        self.joint_local_ids = [model_builder.joint_label.index(jname) for jname in self.joint_names]
-        joint_ids = np.zeros((model_builder.world_count, len(self.joint_names)), dtype=int)
-        for world_id in range(model_builder.world_count):
+        num_worlds = model_builder.world_count
+        joints_num = model_builder.joint_count // num_worlds
+        self.joint_local_ids = [next(i for i, joint_label in enumerate(model_builder.joint_label) if
+                                     joint_label.endswith(Path(jname).stem)) for jname in self.joint_names]
+        self.joint_local_qpos_ids = [model_builder.joint_q_start[jid] for jid in self.joint_local_ids]
+        self.joint_qpos_ids = np.zeros((num_worlds, len(self.joint_local_qpos_ids)), dtype=int)
+        self.joint_local_dof_ids = [model_builder.joint_qd_start[jid] for jid in self.joint_local_ids]
+        self.joint_dof_ids = np.zeros((num_worlds, len(self.joint_local_dof_ids)), dtype=int)
+        joint_ids = np.zeros((num_worlds, len(self.joint_names)), dtype=int)
+        for world_id in range(num_worlds):
             joint_id_offset = world_id * joints_num
             joint_ids[world_id] = [i + joint_id_offset for i in self.joint_local_ids]
+            self.joint_qpos_ids[world_id] = [i + joint_id_offset for i in self.joint_local_qpos_ids]
+            self.joint_dof_ids[world_id] = [i + joint_id_offset for i in self.joint_local_dof_ids]
         self.joint_ids = wp.array(joint_ids, dtype=wp.int32)
 
         # Joint target controls
-        self.joint_target_controls = wp.zeros((model_builder.world_count, model_builder.joint_dof_count),
-                                              dtype=wp.float32)
+        self.joint_target_qs = wp.zeros((num_worlds, len(model_builder.joint_q)), dtype=wp.float32)
+        self.joint_target_controls = wp.zeros((num_worlds, model_builder.joint_dof_count), dtype=wp.float32)
 
         # Eval model fk
         self.state_0 = model.state()
@@ -139,10 +148,10 @@ class NewtonBackend:
                                                   solver="newton",
                                                   integrator="implicitfast",
                                                   njmax=200,
-                                                  nconmax=150,
+                                                  nconmax=1000,
                                                   impratio=10.0,
                                                   cone="elliptic",
-                                                  iterations=100,
+                                                  iterations=1000000,
                                                   ls_iterations=50,
                                                   use_mujoco_cpu=False)
 
@@ -162,6 +171,9 @@ class NewtonBackend:
         # Capture (always the last, only once the model is fully setup)
         self.graph = None
         self.capture()
+
+        # Make first step
+        self.step()
 
     def capture(self) -> None:
         if wp.get_device().is_cuda:

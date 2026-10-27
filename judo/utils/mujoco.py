@@ -3,8 +3,9 @@
 from typing import Sequence, Union
 from copy import deepcopy
 
-import trimesh
+# import trimesh
 import numpy as np
+import torch
 
 # mujoco
 import mujoco as mj
@@ -114,7 +115,7 @@ class MJRolloutBackend:
     def rollout(self,
                 model_data_pairs: list[tuple[MjModel, MjData]],
                 x0: np.ndarray,
-                controls: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+                controls: torch.Tensor) -> tuple[np.ndarray, np.ndarray]:
         """Conduct a rollout depending on the backend."""
         # unpack models into a list of models and data
         ms, ds = zip(*model_data_pairs, strict=True)
@@ -134,6 +135,7 @@ class MJRolloutBackend:
 
         # rollout
         if self.backend == BackendType.MUJOCO:
+            controls = controls.cpu().numpy()
             _states, _out_sensors = self.rollout_func(ms, ds, x0_batched, controls)
         else:
             raise ValueError(f"Unknown backend: {self.backend}")

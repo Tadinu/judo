@@ -2,6 +2,7 @@ from typing import Callable, Optional
 from omegaconf import DictConfig
 
 import numpy as np
+import torch
 
 # judo
 from judo.simulation.base import Simulation
@@ -52,7 +53,7 @@ class NTSimulation(Simulation):
             self.sim_backend.set_model(self.task.nt_sim_model, self.task.nt_sim_model_builder)
         self.model = self.sim_backend.model
         self.model_builder = self.sim_backend.model_builder
-        self.nominal_action: np.ndarray = None
+        self.nominal_action: torch.Tensor = None
 
         # Warm up to get stabilized sim initial state
         self.step()
@@ -71,19 +72,10 @@ class NTSimulation(Simulation):
             # NOTE: These are the same
             # print(self.nominal_action)
             # print(self.nominal_control_spline(self.sim_backend.sim_time))
-            with wp.ScopedDevice(self.sim_backend.wp_device):
-                if self.nominal_action is not None:
-                    self.sim_backend.joint_target_controls.assign(
-                        wp.array(np.full((self.model_builder.world_count, self.model_builder.joint_dof_count),
-                                         self.nominal_action),
-                                 dtype=wp.float32))
-
-                else:
-                    # Update target controls with [control_spline(self.sim_time)]
-                    self.sim_backend.joint_target_controls.assign(
-                        wp.array(np.full((self.model_builder.world_count, self.model_builder.joint_dof_count),
-                                         self.nominal_control_spline(self.sim_backend.sim_time)),
-                                 dtype=wp.float32))
+            with (wp.ScopedDevice(self.sim_backend.wp_device)):
+                ctrls = self.nominal_action if self.nominal_action is not None else \
+                    self.nominal_control_spline(self.sim_backend.sim_time)
+                self.sim_backend.joint_target_controls.assign(wp.from_torch(ctrls.to(torch.float32)))
 
     @property
     def sim_state(self) -> newton.State:

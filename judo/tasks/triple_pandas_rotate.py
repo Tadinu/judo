@@ -11,18 +11,15 @@ import torch
 import mujoco as mj
 
 # judo
-from judo import MODEL_PATH
-from judo.gui import slider
-from judo.tasks.leap_cube import LeapCube, LeapCubeConfig
-from judo.utils.fabrics_utils import FabricsAgent
 from judo.utils.math_utils import np_quat_diff_so3, torch_quat_diff_so3
-from judo.utils.mujoco import mj_get_qpos_ids, mj_get_mocap_id
+from judo.utils.mujoco import mj_get_qpos_ids, mj_get_dof_ids, mj_get_mocap_id
 
 if TYPE_CHECKING:
     from judo.simulation.base import Simulation
 
 # mjmanip
-from mjmanip import MJMANIP_DEVICE, DEFAULT_SCENE_XML_PATH
+from mjmanip import MJMANIP_DEVICE, DEFAULT_SCENE_XML_PATH, MJMANIP_DEVICE
+from mjmanip.robot.arm_hand import ArmHand
 from mjmanip.robot.multi_panda_nohands import MultiPandaNoHandsEnv, MultiPandaNoHands, ARM_SCENE_XML_PATH, ARM_XML_PATH
 from mjmanip.mj_utils import mj_model_joints_qids
 
@@ -38,7 +35,7 @@ class TriplePandasRotateConfig(TaskConfig):
     """Reward configuration LEAP object rotation task."""
 
     task_name: str = "triple_pandas_rotate"
-    sim_backend: str = BackendType.MUJOCO_WARP.name
+    sim_backend: str = BackendType.MUJOCO.name if MJMANIP_DEVICE == "cpu" else BackendType.MUJOCO_WARP.name
     robot_class: ArmHand = MultiPandaNoHands
 
     xml_path = None
@@ -65,6 +62,7 @@ class TriplePandasRotate(Task[TriplePandasRotateConfig]):
         super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
         self.obj_id: int = -1
         self.obj_qpos_ids: list[int]
+        self.obj_dof_ids: list[int]
         self.target_mocap_id: int = -1
         # distance sensors
         self.obj_pos_distance_to_palms_sensor_idxes = [self.get_sensor_start_index(
@@ -76,8 +74,11 @@ class TriplePandasRotate(Task[TriplePandasRotateConfig]):
 
     def init_ids(self):
         super().init_ids()
-        self.obj_id = mj.mj_name2id(self.mj_model, mj.mjtObj.mjOBJ_BODY, OBJ_NAME)
+        self.obj_id = self.mj_model.body(OBJ_NAME).id
+        self.obj_name = OBJ_NAME
+        self.obj = self.mj_data.body(self.obj_id)
         self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [f"{OBJ_NAME}_freejoint"])
+        self.obj_dof_ids = mj_get_dof_ids(self.mj_model, [f"{OBJ_NAME}_freejoint"])
         self.target_mocap_id = mj_get_mocap_id(self.mj_model, f"{OBJ_NAME}_goal")
 
         # distance sensors
@@ -114,7 +115,7 @@ class TriplePandasRotate(Task[TriplePandasRotateConfig]):
 
         # Obj Rotating cost
         if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
-            obj_orientation = states[..., self.obj_qpos_ids[3:7]]
+            obj_orientation = states[..., self.obj_qpos_ids[3:]]
         else:
             # NOTE: Cannot use mocap's related quat sensor here since MuJoCo-C Rollout does not yet support mocap_pos/quat
             # obj_orientation_err = sensors[..., self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
@@ -140,16 +141,17 @@ class TriplePandasRotate(Task[TriplePandasRotateConfig]):
         # rewards = super().reward_torch(states, sensors, controls, system_metadata)
 
         # Position costs
-        squared_distance = torch.zeros(states.shape[0])
+        squared_distance = torch.zeros(states.shape[0], device=MJMANIP_DEVICE)
         for palm_distance_sensor_idx in self.obj_pos_distance_to_palms_sensor_idxes:
             reaching_err = self.sensor_value(sensors, palm_distance_sensor_idx, 3)
             squared_distance += torch.square(reaching_err).sum(-1).mean(-1)
-        position_cost = 0.1 * squared_distance + 100 * torch.max(squared_distance - 0.1, torch.zeros(1))
+        position_cost = 0.1 * squared_distance + 100 * torch.max(squared_distance - 0.1,
+                                                                 torch.zeros(1, device=MJMANIP_DEVICE))
         # vertical_position_cost = 0.1 * torch.abs(sensors[..., self.obj_pos_distance_to_palms_sensor_idxes + 2]).mean(-1)
 
         # Obj Rotating cost
         if self.MJ_C_ROLLOUT_FULL_PHYSICS_STATE_ONLY:
-            obj_orientation = states[..., self.obj_qpos_ids[3:7]]
+            obj_orientation = states[..., self.obj_qpos_ids[3:]]
         else:
             # NOTE: Cannot use mocap's related quat sensor here since MuJoCo-C Rollout does not yet support mocap_pos/quat
             # obj_orientation_err = sensors[..., self.obj_quat_distance_sensor_idx:self.obj_quat_distance_sensor_idx + 4]
@@ -158,20 +160,25 @@ class TriplePandasRotate(Task[TriplePandasRotateConfig]):
         orientation_cost = (50 * torch.square(torch_quat_diff_so3(obj_orientation, self.goal_quat_torch))
                             .sum(-1).mean(-1))
 
+        # Object vel cost
+        obj_vel = states[..., self.obj_dof_ids]
+        velocity_cost = 0.001 * torch.square(obj_vel).sum(-1).mean(-1)
+
         # Contact cost
         palms_contact_reward = 0.01 * self.sensors_contact_cost(sensors, self.obj_contact_with_palms_sensor_idxs)
 
-        total_reward = -(position_cost + orientation_cost) + palms_contact_reward
+        total_reward = -(position_cost + orientation_cost + velocity_cost) + palms_contact_reward
         # print(total_reward.mean())
         return total_reward
 
     def post_sim_step(self) -> None:
         """Checks if the obj has dropped and resets if so."""
-        obj_pose = self.mj_data.qpos[self.obj_qpos_ids]
-        # print(obj_pose[2])
-        has_dropped = obj_pose[2] < 0.1
-
-        # we reset here if the obj has dropped
+        # obj_pose = self.mj_data.qpos[self.obj_qpos_ids]
+        # print(self.obj.xpos)
+        # Reset obj pose if dropped to floor
+        obj_pos = self.obj.xpos
+        has_dropped = ((obj_pos[0] < 0. or obj_pos[0] > 1.5) or (obj_pos[1] < 0. or obj_pos[1] > 1.5)
+                       and obj_pos[2] < 0.2)
         if has_dropped:
             self.reset()
 
@@ -186,8 +193,13 @@ class TriplePandasRotate(Task[TriplePandasRotateConfig]):
 
     def reset(self) -> None:
         """Resets the model to a default state with random goal."""
-        self.mj_data.qpos[:] = self.config.qpos_home
-        self.mj_data.qvel[:] = 0.0
-        self.mj_data.ctrl[:] = self.config.reset_command
-        self._update_goal()
-        mj.mj_forward(self.mj_model, self.mj_data)
+        if self.mj_model:
+            """Resets the model to a default state with random goal."""
+            self.mj_data.qpos[:] = self.config.qpos_home
+            self.mj_data.qpos[self.obj_qpos_ids] = self.config.robot_class.OBJECT_INIT_POSES[self.obj_name]
+            self.mj_data.qvel[:] = 0.0
+            self.mj_data.ctrl[:] = self.config.reset_command
+            self._update_goal()
+            mj.mj_forward(self.mj_model, self.mj_data)
+        else:
+            pass

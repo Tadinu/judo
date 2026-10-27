@@ -130,6 +130,7 @@ class MPCApp:
                 self.lock = Lock()
 
             # MUJOCO-Specific controllers
+            from judo.tasks.panda_leap_pick import PandaLeapPickConfig
             if self.is_mujoco and robot_class and sim_backend_type == BackendType.MUJOCO:
                 OBJ_NAME = robot_class.OBJECT_NAMES[0]
                 # Arm controller
@@ -155,6 +156,9 @@ class MPCApp:
                 self.robot_qpos_ids = np.concat([self.arm_qpos_ids, self.hand_qpos_ids])
                 self.robot_dof_ids = np.concat([self.arm_dof_ids, self.hand_dof_ids])
                 self.mj_robot_ctrl = self.mj_data.qpos if self.sim.kinematics_mode else self.mj_data.ctrl
+
+                if self.task_name != PandaLeapPickConfig().task_name:
+                    return
 
                 # Object
                 OBJ_BODY_NAMES = [OBJ_NAME]
@@ -305,8 +309,8 @@ class MPCApp:
                     self.plan()
 
                 # Robot class specific GUI visualizing
-                if self.sim_backend_type == BackendType.MUJOCO:
-                    self.robot_class.visualize(viewer=mj_viewer, data=self.mj_data)
+                if self.sim_backend_type == BackendType.MUJOCO and self.robot_class:
+                    self.robot_class.visualize(viewer=mj_viewer, model=self.mj_model, data=self.mj_data)
 
                 # Step
                 self.sim.step()

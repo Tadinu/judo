@@ -73,7 +73,7 @@ class PandaLeapPickConfig(TaskConfig):
     """Reward configuration Panda-Leap obj picking task."""
 
     task_name: str = "panda_leap_pick"
-    sim_backend: str = BackendType.MUJOCO_WARP.name
+    sim_backend: str = BackendType.MUJOCO.name if MJMANIP_DEVICE == "cpu" else BackendType.MUJOCO_WARP.name
     robot_class: ArmHand = PANDA_LEAP
     qpos_home: Optional[np.ndarray] = field(default_factory=
                                             lambda: PANDA_LEAP.ARM_HOME_QPOS +

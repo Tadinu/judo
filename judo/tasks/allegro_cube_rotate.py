@@ -17,18 +17,27 @@ import warp as wp
 from mjmanip import MJMANIP_DEVICE
 from mjmanip.robot.arm_hand import ArmHand
 from mjmanip.robot.allegro import Allegro
+from mjmanip.newton.newton_utils import nt_get_body_id
 
 # judo
-from judo import MODEL_PATH, BackendType
+from judo import BackendType
 from judo.gui import slider
 from judo.tasks.base import Task, TaskConfig
-from judo.tasks.leap_cube import LeapCubeConfig
-from judo.tasks.caltech_leap_cube import CaltechLeapCubeConfig
 from judo.utils.math_utils import np_quat_diff, np_quat_diff_so3, torch_quat_diff_so3
+from judo.utils.mujoco import mj_get_qpos_ids, mj_get_mocap_id
 from judo.utils.warp import wp_pose_to_mj
 
 if TYPE_CHECKING:
     from judo.simulation.base import Simulation
+
+# mjmanip
+from mjmanip import DEFAULT_SCENE_XML_PATH
+from mjmanip.mj_utils import IDENTITY_WXYZ
+from mjmanip.robot.allegro import (HAND_XML_PATH as ALLEGRO_HAND_XML_PATH,
+                                   AllegroEnv, Allegro)
+
+OBJ_NAME = Allegro.OBJECT_NAMES[0]
+Allegro.BASE_POSES = [np.array([0.0, 0.0, 0.1, 0, 1, 0, 1])] * Allegro.NINSTANCES
 
 
 @slider("w_pos", 0.0, 200.0)
@@ -37,56 +46,32 @@ if TYPE_CHECKING:
 class AllegroCubeRotateConfig(TaskConfig):
     """Reward configuration ALLEGRO cube rotation task."""
 
-    sim_backend: str = BackendType.MUJOCO_WARP.name
+    sim_backend: str = BackendType.MUJOCO.name if MJMANIP_DEVICE == "cpu" else BackendType.MUJOCO_WARP.name
     task_name: str = "allegro_cube"
     robot_class: ArmHand = Allegro
-    xml_path: Optional[Union[Path, str]] = LeapCubeConfig().xml_path  # CaltechLeapCubeConfig().xml_path
-    sim_xml_path: Optional[Union[Path, str]] = LeapCubeConfig().sim_xml_path  # CaltechLeapCubeConfig().sim_xml_path
-    usd_path: Optional[Union[Path, str]] = str(MODEL_PATH / "usd" / "allegro_left_hand_with_cube.usda")
+    xml_path: Optional[Union[Path, str]] = str()
+    sim_xml_path: Optional[Union[Path, str]] = str()
+    qpos_home: Optional[np.ndarray] = field(default_factory=
+                                            lambda: Allegro.HAND_HOME_QPOS * Allegro.NINSTANCES +
+                                                    Allegro.OBJECT_INIT_POSES[OBJ_NAME].tolist())
+
+    reset_command: Optional[np.ndarray] = field(default_factory=
+                                                lambda: np.array(Allegro.HAND_HOME_QPOS * Allegro.NINSTANCES))
+    usd_path: Optional[Union[Path, str]] = str()  # str(MODEL_PATH / "usd" / "allegro_left_hand_with_cube.usda")
     goal_pos: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.03, 0.1]))
     goal_quat: np.ndarray = field(default_factory=lambda: np.array([1.0, 0.0, 0.0, 0.0]))
-    total_joint_q_size: int = 24
-    total_joint_dq_size: int = 23
-    total_body_q_size: int = 23
-    total_body_qd_size: int = 23
-    total_body_f_size: int = 23
+    nt_total_joint_q_size: int = 24
+    nt_total_joint_dq_size: int = 23
+    nt_total_body_q_size: int = 23
+    nt_total_body_qd_size: int = 23
+    nt_total_body_f_size: int = 23
     w_pos: float = 100.0
     w_rot: float = 0.1
 
     def __post_init__(self):
-        # Finger joints only
-        self.joint_names = [
-            '/World/envs/env_0/Robot/palm_link/index_joint_0',
-            '/World/envs/env_0/Robot/index_link_0/index_joint_1',
-            '/World/envs/env_0/Robot/index_link_1/index_joint_2',
-            '/World/envs/env_0/Robot/index_link_2/index_joint_3',
-            '/World/envs/env_0/Robot/palm_link/middle_joint_0',
-            '/World/envs/env_0/Robot/middle_link_0/middle_joint_1',
-            '/World/envs/env_0/Robot/middle_link_1/middle_joint_2',
-            '/World/envs/env_0/Robot/middle_link_2/middle_joint_3',
-            '/World/envs/env_0/Robot/middle_link_3/middle_biotac_tip_joint',
-            '/World/envs/env_0/Robot/palm_link/ring_joint_0',
-            '/World/envs/env_0/Robot/ring_link_0/ring_joint_1',
-            '/World/envs/env_0/Robot/ring_link_1/ring_joint_2',
-            '/World/envs/env_0/Robot/ring_link_2/ring_joint_3',
-            '/World/envs/env_0/Robot/ring_link_3/ring_biotac_tip_joint',
-            '/World/envs/env_0/Robot/palm_link/thumb_joint_0',
-            '/World/envs/env_0/Robot/thumb_link_0/thumb_joint_1',
-            '/World/envs/env_0/Robot/thumb_link_1/thumb_joint_2',
-            '/World/envs/env_0/Robot/thumb_link_2/thumb_joint_3',
-            '/World/envs/env_0/Robot/thumb_link_3/thumb_biotac_tip_joint'
-        ]
-
-        self.qpos_home = CaltechLeapCubeConfig().qpos_home if 'caltech' in self.xml_path else np.array(
-            [
-                0.0, 0.03, 0.1, 1.0, 0.0, 0.0, 0.0,  # cube
-                0.5, -0.75, 0.75, 0.25,  # index
-                0.5, 0.0, 0.75, 0.25,  # middle
-                0.5, 0.75, 0.75, 0.25,  # ring
-                0.65, 0.9, 0.75, 0.6,  # thumb
-            ])
-
-        self.reset_command = self.qpos_home[7:]
+        self.joint_names = Allegro.HAND_JOINTS_NAMES
+        self.act_names = Allegro.HAND_ACTS_NAMES
+        self.reset_command = Allegro.HAND_HOME_QPOS
 
 
 class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
@@ -98,15 +83,31 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
         """Initializes the ALLEGRO cube rotation task."""
         super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
 
-        goal_mocap_body_id = mj.mj_name2id(self.mj_sim_model, mj.mjtObj.mjOBJ_BODY, "target")
-        self.goal_mocap_id = self.mj_sim_model.body_mocapid[goal_mocap_body_id] if goal_mocap_body_id > -1 else -1
         self.goal_pos_torch = torch.as_tensor(self.config.goal_pos, device=MJMANIP_DEVICE).float()
         self.goal_quat_torch = torch.as_tensor(self.config.goal_quat, device=MJMANIP_DEVICE).float()
-        if self.nt_sim_model_builder:
-            cube_names = ['cube', '/World/envs/env_0/object/DexCube']
-            self.nt_cube_body_idx_offset = [self.nt_sim_model_builder.body_label.index(cube_name)
-                                            for cube_name in cube_names
-                                            if cube_name in self.nt_sim_model_builder.body_label][0]
+
+    def mj_compose_spec(self) -> Optional[mj.MjSpec]:
+        self.robot_env = AllegroEnv(world_scene_xml=DEFAULT_SCENE_XML_PATH,
+                                    allegro_xml=ALLEGRO_HAND_XML_PATH,
+                                    base_free=False)
+        spec = self.robot_env.construct_main_spec(self.robot_env.meshdir, self.robot_env.texturedir)
+        spec.option.timestep = 0.002
+        return spec
+
+    def init_ids(self):
+        super().init_ids()
+        self.obj_name = OBJ_NAME
+        if self.mj_model:
+            self.obj_id = self.mj_model.body(OBJ_NAME).id
+            self.obj_data = self.mj_data.body(self.obj_id)
+            self.obj_qpos_ids = mj_get_qpos_ids(self.mj_model, [f"{OBJ_NAME}_freejoint"])
+            self.goal_mocap_id = self.mj_model.body_mocapid[self.mj_model.body(f"{OBJ_NAME}_goal").id]
+        else:
+            self.obj_id = -1
+            self.obj_data = None
+
+            if self.nt_sim_model_builder:
+                self.nt_cube_body_idx_offset = nt_get_body_id(self.nt_sim_model_builder, Allegro.OBJECT_NAMES[0])
 
     def nt_configure_custom_model_builder(self, model_builder: newton.ModelBuilder):
         model_builder.default_shape_cfg.ke = 1.0e3
@@ -161,6 +162,30 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
         rewards = -(pos_cost + rot_cost)
         return rewards
 
+    def reward_torch(self,
+                     states: torch.Tensor,
+                     sensors: torch.Tensor,
+                     controls: torch.Tensor,
+                     system_metadata: Optional[dict[str, Any]] = None) -> torch.Tensor:
+        """Implements the ALLEGRO cube rotation tracking task reward."""
+        if system_metadata is None:
+            system_metadata = {}
+
+        # weights
+        w_pos = self.config.w_pos
+        w_rot = self.config.w_rot
+
+        # "standard" tracking task
+        qo_pos_traj = states[..., :3]
+        qo_quat_traj = states[..., 3:7]
+        qo_pos_diff = qo_pos_traj - self.goal_pos_torch
+        qo_quat_diff = torch_quat_diff_so3(qo_quat_traj, self.goal_quat_torch)
+
+        pos_cost = w_pos * 0.5 * torch.square(qo_pos_diff).sum(-1).mean(-1)
+        rot_cost = w_rot * 0.5 * torch.square(qo_quat_diff).sum(-1).mean(-1)
+        rewards = -(pos_cost + rot_cost)
+        return rewards
+
     def nt_reward(self,
                   states: list[newton.State],
                   contacts: list[newton.Contacts],
@@ -196,40 +221,16 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
         rewards = -(pos_costs + rot_costs)
         return rewards
 
-    def reward_torch(self,
-                     states: torch.Tensor,
-                     sensors: torch.Tensor,
-                     controls: torch.Tensor,
-                     system_metadata: Optional[dict[str, Any]] = None) -> torch.Tensor:
-        """Implements the ALLEGRO cube rotation tracking task reward."""
-        if system_metadata is None:
-            system_metadata = {}
-
-        # weights
-        w_pos = self.config.w_pos
-        w_rot = self.config.w_rot
-
-        # "standard" tracking task
-        qo_pos_traj = states[..., :3]
-        qo_quat_traj = states[..., 3:7]
-        qo_pos_diff = qo_pos_traj - self.goal_pos_torch
-        qo_quat_diff = torch_quat_diff_so3(qo_quat_traj, self.goal_quat_torch)
-
-        pos_cost = w_pos * 0.5 * torch.square(qo_pos_diff).sum(-1).mean(-1)
-        rot_cost = w_rot * 0.5 * torch.square(qo_quat_diff).sum(-1).mean(-1)
-        rewards = -(pos_cost + rot_cost)
-        return rewards
-
     def post_sim_step(self) -> None:
         """Checks if the cube has dropped and resets if so."""
         nt_obj_pose = self.nt_get_obj_pose(self.nt_sim.sim_state, in_sim=True) if self.nt_sim else None
-        has_dropped = self.mj_data.qpos[2] < -0.3 if self.mj_data else (nt_obj_pose[2] < 0.01)
+        has_dropped = self.obj_data.xpos[2] < 0.1 if self.mj_model else (nt_obj_pose[2] < 0.01)
 
-        # we reset here if the cube has dropped
+        # Reset cube if dropped
         if has_dropped:
             self.reset()
 
-        # check whether goal quat needs to be updated
+        # Check whether goal quat needs to be updated
         goal_quat = self.goal_quat
         obj_quat = self.mj_data.qpos[3:7] if self.mj_data else nt_obj_pose[3:]
         q_diff = np_quat_diff(obj_quat, goal_quat)
@@ -262,9 +263,10 @@ class AllegroCubeRotate(Task[AllegroCubeRotateConfig]):
         """Resets the model to a default state with random goal."""
         if self.mj_model:
             """Resets the model to a default state with random goal."""
-            self.mj_data.qpos[:] = self.config.qpos_home
-            self.mj_data.qvel[:] = 0.0
-            self.mj_data.ctrl[:] = self.config.reset_command
+            self.mj_data.qpos[self.qpos_ids] = 0.0  # self.config.robot_class.HAND_HOME_QPOS
+            self.mj_data.qpos[self.obj_qpos_ids] = self.config.robot_class.OBJECT_INIT_POSES[self.obj_name]
+            self.mj_data.qvel[self.qdof_ids] = 0.0
+            self.mj_data.ctrl[self.ctrl_ids] = self.config.reset_command
             self._update_goal()
             mj.mj_forward(self.mj_model, self.mj_data)
         else:

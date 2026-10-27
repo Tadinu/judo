@@ -37,6 +37,7 @@ from judo.simulation.nt_simulation import NTSimulation
 from judo.utils.newton import NewtonBackend
 
 # mjmanip
+from mjmanip import MJMANIP_DEVICE
 from mjmanip.robot.arm_hand import ArmHandDiffIK
 
 
@@ -335,6 +336,7 @@ class MPController:
 
             # Roll out dynamics with action sequences.
             if self.mj_model:
+                # print("sim state time", self.mj_current_state[0])
                 self.task.pre_rollout(self.mj_current_state)
                 if self.mjw_rollout_backend:
                     self.mj_states, self.mj_sensors = self.mjw_rollout_backend.rollout(self.mj_current_state,
@@ -344,14 +346,15 @@ class MPController:
                     self.mj_states, self.mj_sensors = self.mj_rollout_backend.rollout(self.mj_model_data_pairs,
                                                                                       self.mj_current_state,
                                                                                       self.rollout_controls)
+                    self.mj_states = torch.as_tensor(self.mj_states, device=MJMANIP_DEVICE)
+                    self.mj_sensors = torch.as_tensor(self.mj_sensors, device=MJMANIP_DEVICE)
                 self.task.post_rollout(
                     self.mj_states,
                     self.mj_sensors,
                     self.rollout_controls,
                     self.system_metadata,
                 )
-                task_reward = self.task.reward_torch if self.mjw_rollout_backend else self.task.reward
-                self.rewards = task_reward(
+                self.rewards = self.task.reward_torch(
                     self.mj_states,
                     self.mj_sensors,
                     self.rollout_controls,
@@ -361,9 +364,8 @@ class MPController:
                 # [self.rollout_controls] -> [self.nt_rollout_backend.rollout_model_ctrls' joint_target_pos]
                 for i in range(len(self.nt_rollout_backend.rollout_model_ctrls)):
                     control = self.nt_rollout_backend.rollout_model_ctrls[i]
-                    control.joint_target_q = wp.array(torch.hstack(self.rollout_controls[:, i, :].squeeze()),
-                                                      dtype=control.joint_target_q.dtype,
-                                                      device=control.joint_target_q.device)
+                    control.joint_target_q.assign(
+                        wp.from_torch(self.rollout_controls[:, i, :].squeeze().to(torch.float32)))
 
                 # Rollout backend with updated [joint_target_controls]
                 self.nt_rollout_backend.step()
@@ -460,6 +462,8 @@ class MPController:
         """Updates the states."""
         if self.mj_rollout_backend:
             assert isinstance(state, MujocoState)
+            assert state.data.size == mj.mj_stateSize(self.mj_model, self.mj_state_type)
+            self.mj_current_state = state.data
         elif self.mjw_rollout_backend:
             assert isinstance(state, np.ndarray)
             assert state.size == mj.mj_stateSize(self.mj_model, self.mj_state_type)
