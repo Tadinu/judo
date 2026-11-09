@@ -9,16 +9,16 @@ from xvfbwrapper import Xvfb
 
 # judo
 from judo.app.mpc_app import MPCApp
-from judo.tasks.triple_pandas_rotate import TriplePandasRotateConfig
+from judo.tasks.multi_pandas_rotate import MultiPandasRotateConfig
 
 
-class TriplePandasRotateApp(MPCApp):
+class MultiPandasRotateApp(MPCApp):
     def __init__(self,
                  optimizer_name: str,
                  task_registration_cfg: Optional[DictConfig] = None,
                  optimizer_registration_cfg: Optional[DictConfig] = None,
                  headless: bool = False) -> None:
-        cfg = TriplePandasRotateConfig()
+        cfg = MultiPandasRotateConfig()
         super().__init__(task_name=cfg.task_name,
                          optimizer_name=optimizer_name,
                          sim_backend_type=cfg.sim_backend_type(),
@@ -32,7 +32,7 @@ task_registration_cfg = optimizer_name = optimizer_registration_cfg = None
 CONFIG_PATH = (Path(__file__).parent.parent / "configs").resolve()
 
 
-@hydra.main(config_path=str(CONFIG_PATH), config_name="judo_dora_triple_pandas_rotate", version_base="1.3")
+@hydra.main(config_path=str(CONFIG_PATH), config_name="judo_dora_multi_pandas_rotate", version_base="1.3")
 def fetch_cfgs(cfg: DictConfig) -> None:
     """Main function to run judo via a hydra configuration yaml file."""
     global task_registration_cfg, optimizer_name, optimizer_registration_cfg
@@ -49,10 +49,10 @@ with initialize_config_dir(config_dir=str(CONFIG_PATH), version_base="1.3"):
 
 
 def run_app(headless: bool) -> None:
-    app = TriplePandasRotateApp(optimizer_name=optimizer_name,
-                                task_registration_cfg=task_registration_cfg,
-                                optimizer_registration_cfg=optimizer_registration_cfg,
-                                headless=headless)
+    app = MultiPandasRotateApp(optimizer_name=optimizer_name,
+                               task_registration_cfg=task_registration_cfg,
+                               optimizer_registration_cfg=optimizer_registration_cfg,
+                               headless=headless)
     app.spin()
 
 

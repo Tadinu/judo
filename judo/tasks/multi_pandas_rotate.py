@@ -18,10 +18,9 @@ if TYPE_CHECKING:
     from judo.simulation.base import Simulation
 
 # mjmanip
-from mjmanip import MJMANIP_DEVICE, DEFAULT_SCENE_XML_PATH, MJMANIP_DEVICE
+from mjmanip import MJMANIP_DEVICE
 from mjmanip.robot.arm_hand import ArmHand
 from mjmanip.robot.multi_panda_nohands import MultiPandaNoHandsEnv, MultiPandaNoHands, ARM_SCENE_XML_PATH, ARM_XML_PATH
-from mjmanip.mj_utils import mj_model_joints_qids
 
 # judo
 from judo import BackendType
@@ -31,10 +30,10 @@ OBJ_NAME = MultiPandaNoHands.OBJECT_NAMES[0]
 
 
 @dataclass
-class TriplePandasRotateConfig(TaskConfig):
+class MultiPandasRotateConfig(TaskConfig):
     """Reward configuration LEAP object rotation task."""
 
-    task_name: str = "triple_pandas_rotate"
+    task_name: str = "multi_pandas_rotate"
     sim_backend: str = BackendType.MUJOCO.name if MJMANIP_DEVICE == "cpu" else BackendType.MUJOCO_WARP.name
     robot_class: ArmHand = MultiPandaNoHands
 
@@ -53,10 +52,10 @@ class TriplePandasRotateConfig(TaskConfig):
     w_rot: float = 50
 
 
-class TriplePandasRotate(Task[TriplePandasRotateConfig]):
+class MultiPandasRotate(Task[MultiPandasRotateConfig]):
     """Defines the free-joint LEAP object picking task."""
 
-    config_t: type[TriplePandasRotateConfig] = TriplePandasRotateConfig
+    config_t: type[MultiPandasRotateConfig] = MultiPandasRotateConfig
 
     def __init__(self, sim: Optional[Simulation] = None, num_rollout_worlds: int = 1) -> None:
         super().__init__(sim, num_rollout_worlds=num_rollout_worlds)

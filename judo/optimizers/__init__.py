@@ -4,6 +4,7 @@ from typing import Type
 
 from judo.optimizers.base import Optimizer, OptimizerConfig
 from judo.optimizers.cem import CrossEntropyMethod, CrossEntropyMethodConfig
+from judo.optimizers.pcem import PCEM, PCEMConfig
 from judo.optimizers.mppi import MPPI, MPPIConfig
 from judo.optimizers.overrides import (
     set_default_caltech_leap_cube_overrides,
@@ -17,7 +18,7 @@ from judo.optimizers.overrides import (
     set_default_leap_object_rotate_overrides,
     set_default_iiwa7_allegro_pick_overrides,
     set_default_panda_leap_pick_overrides,
-    set_default_triple_pandas_rotate_overrides
+    set_default_multi_pandas_rotate_overrides
 )
 from judo.optimizers.ps import PredictiveSampling, PredictiveSamplingConfig
 
@@ -32,10 +33,11 @@ set_default_leap_freejoint_object_pick_overrides()
 set_default_leap_object_rotate_overrides()
 set_default_iiwa7_allegro_pick_overrides()
 set_default_panda_leap_pick_overrides()
-set_default_triple_pandas_rotate_overrides()
+set_default_multi_pandas_rotate_overrides()
 
 _registered_optimizers: dict[str, tuple[Type[Optimizer], Type[OptimizerConfig]]] = {
     "cem": (CrossEntropyMethod, CrossEntropyMethodConfig),
+    "pcem": (PCEM, PCEMConfig),
     "mppi": (MPPI, MPPIConfig),
     "ps": (PredictiveSampling, PredictiveSamplingConfig),
 }
@@ -60,6 +62,8 @@ __all__ = [
     "register_optimizer",
     "CrossEntropyMethod",
     "CrossEntropyMethodConfig",
+    "PCEM",
+    "PCEMConfig",
     "MPPI",
     "MPPIConfig",
     "Optimizer",

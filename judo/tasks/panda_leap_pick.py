@@ -11,7 +11,8 @@ import torch
 
 # mjmanip
 from mjmanip import DEFAULT_SCENE_MJX_XML_PATH, DEFAULT_SCENE_XML_PATH, MJMANIP_DEVICE
-from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
+from mjmanip.robot.arm_hand import ArmHand
+from mjmanip.robot.arm_hand_diffik import ArmHandDiffIK
 from mjmanip.mj_utils import (IDENTITY_POSE, IDENTITY_WXYZ, mj_body_free_joint_name, mj_data_site_pose,
                               mj_data_mocap_pose, mj_data_move_mocap, mj_spec_add_body)
 
@@ -98,14 +99,14 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         super().__init__(sim, num_rollout_worlds=num_rollout_worlds)
         self.goal_pos = self.config.goal_pos
         self.goal_quat = self.config.goal_quat
-        self.goal_pos_torch = torch.tensor(self.goal_pos, device=MJMANIP_DEVICE)
-        self.goal_quat_torch = torch.tensor(self.goal_quat, device=MJMANIP_DEVICE)
+        self.goal_pos_torch = torch.tensor(self.goal_pos, device=self.device)
+        self.goal_quat_torch = torch.tensor(self.goal_quat, device=self.device)
         self.qpos_home = self.config.qpos_home
         self.cur_phase_start_time: dict[ObjectRelocatingPhase, float] = {}
         self.last_phase = ObjectRelocatingPhase.REACHING_OBJ
         self.cur_phase_start_time[ObjectRelocatingPhase.REACHING_OBJ] = time.time()
-        self.desired_grasp_direction: np.ndarray = None
-        self.desired_hand_qpos: np.ndarray = np.zeros(PANDA_LEAP.HAND_DOFS_NO)
+        self.desired_grasp_direction: torch.Tensor = None
+        self.desired_hand_qpos = torch.tensor(PANDA_LEAP.HAND_DOFS_NO)
 
         self.map_controls = self.map_ee_to_arm_controls if USE_EE_MPC else None
         self.rollout_diff_iks = None
@@ -294,7 +295,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             obj_grasp_site_pos = self.sensor_value(sensors, self.obj_grasp_site_pos_sensor_idx, 3)
             obj_grasp_direction_site_pos = self.sensor_value(sensors, self.obj_grasp_direction_site_pos_sensor_idx, 3)
             obj_grasp_direction = (obj_grasp_direction_site_pos - obj_grasp_site_pos) / np.linalg.norm(
-                obj_grasp_direction_site_pos - obj_grasp_site_pos, axis=2)[..., np.newaxis]
+                obj_grasp_direction_site_pos - obj_grasp_site_pos, axis=2).unsqueeze(-1)
         else:
             obj_grasp_site_pos = obj_position
             obj_grasp_direction = self.desired_grasp_direction
@@ -302,9 +303,9 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         grasp_site_pos = self.sensor_value(sensors, self.grasp_site_pos_sensor_idx, 3)
         grasp_direction_site_pos = self.sensor_value(sensors, self.grasp_direction_site_pos_sensor_idx, 3)
         grasp_direction = (grasp_direction_site_pos - grasp_site_pos) / np.linalg.norm(
-            grasp_direction_site_pos - grasp_site_pos, axis=2)[..., np.newaxis]
+            grasp_direction_site_pos - grasp_site_pos, axis=2).unsqueeze(-1)
         grasp_obj_direction = (obj_grasp_site_pos - grasp_site_pos) / \
-                              np.linalg.norm(obj_grasp_site_pos - grasp_site_pos, axis=2)[..., np.newaxis]
+                              np.linalg.norm(obj_grasp_site_pos - grasp_site_pos, axis=2).unsqueeze(-1)
         grasp_direction_cost = (
             # Palm-aimed-toward-object direction
                 55 * np.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1)
@@ -357,7 +358,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         reaching_err = self.sensor_value(sensors, self.obj_pos_distance_to_grasp_sensor_idx, 3)
         squared_distance = torch.square(reaching_err).sum(-1).mean(-1)
         reaching_cost = squared_distance + 100 * torch.max(squared_distance - self.reach_threshold_squared,
-                                                           torch.zeros(1))
+                                                           torch.zeros(1, device=sensors.device))
 
         # Stage 2: Obj Rotating cost
         obj_position = states[..., self.obj_qpos_ids[:3]]
@@ -376,7 +377,7 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
             obj_grasp_site_pos = self.sensor_value(sensors, self.obj_grasp_site_pos_sensor_idx, 3)
             obj_grasp_direction_site_pos = self.sensor_value(sensors, self.obj_grasp_direction_site_pos_sensor_idx, 3)
             obj_grasp_direction = (obj_grasp_direction_site_pos - obj_grasp_site_pos) / torch.norm(
-                obj_grasp_direction_site_pos - obj_grasp_site_pos, dim=2)[..., np.newaxis]
+                obj_grasp_direction_site_pos - obj_grasp_site_pos, dim=2).unsqueeze(-1)
         else:
             obj_grasp_site_pos = obj_position
             obj_grasp_direction = self.desired_grasp_direction
@@ -384,9 +385,9 @@ class PandaLeapPick(Task[PandaLeapPickConfig]):
         grasp_site_pos = self.sensor_value(sensors, self.grasp_site_pos_sensor_idx, 3)
         grasp_direction_site_pos = self.sensor_value(sensors, self.grasp_direction_site_pos_sensor_idx, 3)
         grasp_direction = (grasp_direction_site_pos - grasp_site_pos) / torch.norm(
-            grasp_direction_site_pos - grasp_site_pos, dim=2)[..., np.newaxis]
+            grasp_direction_site_pos - grasp_site_pos, dim=2).unsqueeze(-1)
         grasp_obj_direction = (obj_grasp_site_pos - grasp_site_pos) / \
-                              torch.norm(obj_grasp_site_pos - grasp_site_pos, dim=2)[..., np.newaxis]
+                              torch.norm(obj_grasp_site_pos - grasp_site_pos, dim=2).unsqueeze(-1)
         grasp_direction_cost = (
             # Palm-aimed-toward-object direction
                 55 * torch.square(grasp_direction - grasp_obj_direction).sum(-1).mean(-1)

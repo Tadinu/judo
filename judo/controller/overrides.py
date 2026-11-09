@@ -161,11 +161,11 @@ def set_default_panda_leap_pick_overrides() -> None:
     )
 
 
-def set_default_triple_pandas_rotate_overrides() -> None:
+def set_default_multi_pandas_rotate_overrides() -> None:
     """Sets the default task-specific controller config overrides for the leap cube down task."""
     from judo.utils.fabrics_utils import FabricsAgent
     set_config_overrides(
-        "triple_pandas_rotate",
+        "multi_pandas_rotate",
         MPControllerConfig,
         {
             "horizon": 0.05,

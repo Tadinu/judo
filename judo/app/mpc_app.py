@@ -11,10 +11,6 @@ import warp as wp
 
 import torch
 
-torch.set_default_device('cuda')
-torch.set_default_dtype(torch.float32)
-TORCH_DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-
 import roma
 
 import mujoco as mj
@@ -23,12 +19,11 @@ from mujoco import viewer
 # mjmanip
 from mjmanip import OBJECT_MODELS_DIR as MJMANIP_OBJECT_MODELS_DIR
 from mjmanip.entity_utils import EntityData
-from mjmanip.mj_utils import (mj_data_body_geoms, mj_model_joints_qids, mj_model_actuators_id_list,
-                              mj_data_move_mocap, mj_data_mocap_pose,
-                              mj_data_geoms_world_transforms, mj_data_site_pose,
-                              mj_scene_clear, mj_scene_draw_spheres, mj_scene_draw_arrow)
-from mjmanip.torch3d_utils import p3d_multiply_poses, p3d_pose_inverse
-from mjmanip.robot.arm_hand import ArmHand, ArmHandDiffIK
+from mjmanip.mj_utils import (mj_model_joints_qids, mj_model_actuators_id_list,
+                              mj_data_move_mocap, mj_data_site_pose,
+                              mj_scene_draw_spheres, mj_scene_draw_arrow)
+from mjmanip.robot.arm_hand import ArmHand
+from mjmanip.robot.arm_hand_diffik import ArmHandDiffIK
 from mjmanip.robot.arm_hand_fabrics import ArmHandWithFabricsEnv
 from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
@@ -65,7 +60,7 @@ class MPCApp:
                  fabric_cfg: Optional[ArmHandPoseFabricConfig] = None,
                  kinematics_mode: bool = False,
                  headless: bool = False,
-                 device: str = TORCH_DEVICE) -> None:
+                 device: str = torch.get_default_device()) -> None:
         """Initialize the simulation node."""
         self.task_name = task_name
         self.step_cnt = 0
@@ -130,7 +125,6 @@ class MPCApp:
                 self.lock = Lock()
 
             # MUJOCO-Specific controllers
-            from judo.tasks.panda_leap_pick import PandaLeapPickConfig
             if self.is_mujoco and robot_class and sim_backend_type == BackendType.MUJOCO:
                 OBJ_NAME = robot_class.OBJECT_NAMES[0]
                 # Arm controller
@@ -157,8 +151,10 @@ class MPCApp:
                 self.robot_dof_ids = np.concat([self.arm_dof_ids, self.hand_dof_ids])
                 self.mj_robot_ctrl = self.mj_data.qpos if self.sim.kinematics_mode else self.mj_data.ctrl
 
-                if self.task_name != PandaLeapPickConfig().task_name:
-                    return
+                # from judo.tasks.panda_leap_pick import PandaLeapPickConfig
+                # if self.task_name != PandaLeapPickConfig().task_name:
+                #    return
+                return
 
                 # Object
                 OBJ_BODY_NAMES = [OBJ_NAME]
@@ -392,6 +388,10 @@ class MPCApp:
         return geom_poses
 
     def plan_arm_hand(self):
+        if not hasattr(self, "hand_opt"):
+            self.sim.task.mpc_disabled = False
+            return
+
         # Update object data for hand-opt
         self.hand_opt.step_object()
 
@@ -578,20 +578,20 @@ class MPCApp:
             pass
 
     @classmethod
-    def _draw_points(cls, mj_scene: mj.MjvScene, points: npt.ArrayLike, size: list[float], color: list[float]):
+    def _draw_points(cls, mjv_scene: mj.MjvScene, points: npt.ArrayLike, size: list[float], color: list[float]):
         if isinstance(points, np.ndarray):
             assert len(points.shape) == 2
         npoints = len(points)
-        mj_scene_draw_spheres(mj_scene, positions=points,
+        mj_scene_draw_spheres(mjv_scene, positions=points,
                               sizes=npoints * [size], rgbas=npoints * [color])
 
     @classmethod
-    def _draw_arrows(cls, mj_scene: mj.MjvScene, starts: npt.ArrayLike, ends: npt.ArrayLike, radius: float = 0.01,
+    def _draw_arrows(cls, mjv_scene: mj.MjvScene, starts: npt.ArrayLike, ends: npt.ArrayLike, radius: float = 0.01,
                      color: npt.ArrayLike = (0.2, 0.2, 0.6, 1)):
         if isinstance(starts, np.ndarray):
             assert len(starts.shape) == 2
         for i in range(len(starts)):
-            mj_scene_draw_arrow(mj_scene, starts[i], ends[i], radius=radius, rgba=color)
+            mj_scene_draw_arrow(mjv_scene, starts[i], ends[i], radius=radius, rgba=color)
 
     def visualize_optimized_hand_pcl(self):
         if self.is_mujoco:

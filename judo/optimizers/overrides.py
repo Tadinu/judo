@@ -1,6 +1,7 @@
 # Copyright (c) 2025 Robotics and AI Institute LLC. All rights reserved.
 from judo.config import set_config_overrides
 from judo.optimizers.cem import CrossEntropyMethodConfig
+from judo.optimizers.pcem import PCEMConfig
 from judo.optimizers.mppi import MPPIConfig
 from judo.optimizers.ps import PredictiveSamplingConfig
 from judo.tasks import AllegroCubeRotateConfig, LeapFreeJointObjectPickConfig, LeapObjectRotateConfig
@@ -25,6 +26,12 @@ def set_default_cylinder_push_overrides() -> None:
             "num_rollouts": 32,
             "num_elites": 2,
             "use_noise_ramp": True,
+        },
+    )
+    set_config_overrides(
+        "cylinder_push",
+        PCEMConfig,
+        {
         },
     )
     set_config_overrides(
@@ -61,6 +68,11 @@ def set_default_cartpole_overrides() -> None:
     )
     set_config_overrides(
         "cartpole",
+        PCEMConfig,
+        {},
+    )
+    set_config_overrides(
+        "cartpole",
         MPPIConfig,
         {
             "num_nodes": 4,
@@ -93,6 +105,11 @@ def set_default_leap_cube_overrides() -> None:
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
         },
+    )
+    set_config_overrides(
+        "leap_cube",
+        PCEMConfig,
+        {},
     )
     set_config_overrides(
         "leap_cube",
@@ -134,6 +151,11 @@ def set_default_leap_cube_down_overrides() -> None:
     )
     set_config_overrides(
         "leap_cube_down",
+        PCEMConfig,
+        {},
+    )
+    set_config_overrides(
+        "leap_cube_down",
         MPPIConfig,
         {
             "num_nodes": 4,
@@ -169,6 +191,11 @@ def set_default_caltech_leap_cube_overrides() -> None:
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
         },
+    )
+    set_config_overrides(
+        "caltech_leap_cube",
+        PCEMConfig,
+        {},
     )
     set_config_overrides(
         "caltech_leap_cube",
@@ -212,6 +239,11 @@ def set_default_allegro_cube_overrides() -> None:
     )
     set_config_overrides(
         "allegro_cube",
+        PCEMConfig,
+        {},
+    )
+    set_config_overrides(
+        "allegro_cube",
         MPPIConfig,
         {
             "num_nodes": 4,
@@ -247,6 +279,11 @@ def set_default_leap_freejoint_object_pick_overrides() -> None:
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
         },
+    )
+    set_config_overrides(
+        "leap_freejoint_object_pick",
+        PCEMConfig,
+        {},
     )
     set_config_overrides(
         "leap_freejoint_object_pick",
@@ -290,6 +327,11 @@ def set_default_leap_object_rotate_overrides() -> None:
     )
     set_config_overrides(
         "leap_object_rotate",
+        PCEMConfig,
+        {},
+    )
+    set_config_overrides(
+        "leap_object_rotate",
         MPPIConfig,
         {
             "num_nodes": 4,
@@ -330,6 +372,11 @@ def set_default_fr3_pick_overrides() -> None:
     )
     set_config_overrides(
         "fr3_pick",
+        PCEMConfig,
+        {},
+    )
+    set_config_overrides(
+        "fr3_pick",
         MPPIConfig,
         {
             "num_nodes": 4,
@@ -365,6 +412,11 @@ def set_default_iiwa7_allegro_pick_overrides() -> None:
             "use_noise_ramp": True,
             "noise_ramp": 4.0,
         },
+    )
+    set_config_overrides(
+        "iiwa7_allegro_pick",
+        PCEMConfig,
+        {},
     )
     set_config_overrides(
         "iiwa7_allegro_pick",
@@ -408,6 +460,14 @@ def set_default_panda_leap_pick_overrides() -> None:
     )
     set_config_overrides(
         "panda_leap_pick",
+        PCEMConfig,
+        {
+            "num_rollouts": 64,
+            "num_elites": 10,
+        },
+    )
+    set_config_overrides(
+        "panda_leap_pick",
         MPPIConfig,
         {
             "num_nodes": 4,
@@ -420,10 +480,10 @@ def set_default_panda_leap_pick_overrides() -> None:
     )
 
 
-def set_default_triple_pandas_rotate_overrides() -> None:
-    """Sets the default task-specific controller config overrides for the triple_pandas_rotate task."""
+def set_default_multi_pandas_rotate_overrides() -> None:
+    """Sets the default task-specific controller config overrides for the multi_pandas_rotate task."""
     set_config_overrides(
-        "triple_pandas_rotate",
+        "multi_pandas_rotate",
         PredictiveSamplingConfig,
         {
             "num_nodes": 4,
@@ -434,7 +494,7 @@ def set_default_triple_pandas_rotate_overrides() -> None:
         },
     )
     set_config_overrides(
-        "triple_pandas_rotate",
+        "multi_pandas_rotate",
         CrossEntropyMethodConfig,
         {
             "num_nodes": 4,
@@ -447,7 +507,28 @@ def set_default_triple_pandas_rotate_overrides() -> None:
         },
     )
     set_config_overrides(
-        "triple_pandas_rotate",
+        "multi_pandas_rotate",
+        PCEMConfig,
+        {
+            "horizon": 50,
+            "num_rollouts": 128,
+            "num_iterations": 100,
+            "elite_ratio": 0.05,
+            "std_initial": 10.0,
+            "std_final": 0.1,
+            "ema_alpha": 0.5,
+            "smoothness_weight": 0.01,
+            # Adaptive eta scheduling
+            "eta_initial": 2.0,
+            "eta_final": 10.0,
+            "eta_schedule": "cosine",
+            # Fixed temperature
+            "temperature": 0.1,
+            "use_adam": False,
+        },
+    )
+    set_config_overrides(
+        "multi_pandas_rotate",
         MPPIConfig,
         {
             "num_nodes": 4,

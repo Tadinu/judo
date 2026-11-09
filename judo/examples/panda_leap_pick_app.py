@@ -8,7 +8,6 @@ from xvfbwrapper import Xvfb
 
 # mjmanip
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
-from mjmanip.control.fabrics.fabrics_controller import FabricsController
 from mjmanip.robot.panda_leap_fabrics import (ARM_XML_PATH as PANDA_LEAP_FABRICS_ARM_XML_PATH,
                                               HAND_XML_PATH as PANDA_LEAP_FABRICS_HAND_XML_PATH, \
                                               PandaLeapWithFabricsEnv, PandaLeapWithFabrics)

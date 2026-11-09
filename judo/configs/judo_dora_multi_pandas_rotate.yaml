@@ -1,29 +1,32 @@
 defaults:
   - judo_dora_default
 
-task: triple_pandas_rotate
-optimizer: cem
+task: multi_pandas_rotate
+optimizer: pcem
 custom_tasks:
-  triple_pandas_rotate:
-    task: judo.tasks.triple_pandas_rotate.TriplePandasRotate
-    config: judo.tasks.triple_pandas_rotate.TriplePandasRotate
+  multi_pandas_rotate:
+    task: judo.tasks.multi_pandas_rotate.MultiPandasRotate
+    config: judo.tasks.multi_pandas_rotate.MultiPandasRotate
 
 custom_optimizers:
   cem:
     optimizer: judo.optimizers.cem.CrossEntropyMethod
     config: judo.optimizers.cem.CrossEntropyMethodConfig
+  pcem:
+    optimizer: judo.optimizers.pcem.PCEM
+    config: judo.optimizers.pcem.PCEMConfig
   mppi:
     optimizer: judo.optimizers.mppi.MPPI
     config: judo.optimizers.mppi.MPPIConfig
 
 # example of how to use task-specific controller config overrides
 controller_config_overrides:
-  triple_pandas_rotate:
+  multi_pandas_rotate:
     horizon: 0.25
     spline_order: ZERO
 
 optimizer_config_overrides:
-  triple_pandas_rotate:
+  multi_pandas_rotate:
     ps:
       num_nodes: 4
       num_rollouts: 128

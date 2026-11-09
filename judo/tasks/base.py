@@ -27,7 +27,8 @@ if TYPE_CHECKING:
 
 # mjmanip
 from mjmanip import MJMANIP_DEVICE
-from mjmanip.robot.arm_hand import ArmHand, ArmHandEnv
+from mjmanip.robot.arm_hand import ArmHand
+from mjmanip.robot.arm_hand_env import ArmHandEnv
 from mjmanip.control.fabrics.fabrics.arm_hand_pose_fabric import ArmHandPoseFabricConfig
 from mjmanip.mj_utils import mj_model_joints_qids, mj_model_actuators_id_list
 

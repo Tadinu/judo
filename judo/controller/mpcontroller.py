@@ -36,10 +36,6 @@ from judo.simulation.mj_simulation import MJSimulation
 from judo.simulation.nt_simulation import NTSimulation
 from judo.utils.newton import NewtonBackend
 
-# mjmanip
-from mjmanip import MJMANIP_DEVICE
-from mjmanip.robot.arm_hand import ArmHandDiffIK
-
 
 @slider("horizon", 0.1, 10.0, bounded=True)
 @slider("control_freq", 0.25, 50.0)
@@ -76,6 +72,7 @@ class MPController:
         self._controller_cfg = controller_config
         self.task = task
         self.optimizer = optimizer
+        self.device = self.task.device
 
         self.available_optimizers = get_registered_optimizers()
         self.available_tasks = get_registered_tasks()
@@ -346,8 +343,8 @@ class MPController:
                     self.mj_states, self.mj_sensors = self.mj_rollout_backend.rollout(self.mj_model_data_pairs,
                                                                                       self.mj_current_state,
                                                                                       self.rollout_controls)
-                    self.mj_states = torch.as_tensor(self.mj_states, device=MJMANIP_DEVICE)
-                    self.mj_sensors = torch.as_tensor(self.mj_sensors, device=MJMANIP_DEVICE)
+                    self.mj_states = torch.as_tensor(self.mj_states, device=self.device)
+                    self.mj_sensors = torch.as_tensor(self.mj_sensors, device=self.device)
                 self.task.post_rollout(
                     self.mj_states,
                     self.mj_sensors,
